@@ -1,1 +1,1 @@
-1. Added assetUniqueId to all of the CSV output for crash risk API endpoints
+1. Added function to remove duplicate customer name and contract ID pairs from contract list and store results in unique_contracts.csv prior to running the contracts details function. The contracts details function will use the unique_contracts.csv as it's source.
