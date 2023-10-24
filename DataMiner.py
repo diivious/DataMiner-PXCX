@@ -5406,6 +5406,7 @@ def pxc_crash_risk_factors():
                          "customerName," \
                          "successTrackId," \
                          "assetId," \
+                         "assetUniqueId," \
                          "factor," \
                          "factorType"
             writer = csv.writer(target, delimiter=' ', quotechar=' ', quoting=csv.QUOTE_NONE)
@@ -5452,6 +5453,7 @@ def pxc_crash_risk_factors():
                                                 customerName + ',' +
                                                 successTrackId + ',' +
                                                 assetId + ',' +
+                                                assetUniqueId + ',' +
                                                 factor + ',' +
                                                 factorType)
                                     writer.writerow(CSV_Data.split())
@@ -5485,6 +5487,7 @@ def pxc_similar_assets():
                          "successTrackId," \
                          "crashPredicted," \
                          "assetId," \
+                         "assetUniqueId," \
                          "assetName," \
                          "productId," \
                          "productFamily," \
@@ -5548,6 +5551,7 @@ def pxc_similar_assets():
                                                     successTrackId + ',' +
                                                     crashPredicted + ',' +
                                                     assetId + ',' +
+                                                    assetUniqueId + ',' +
                                                     assetName + ',' +
                                                     productId + ',' +
                                                     productFamily + ',' +
@@ -5589,6 +5593,7 @@ def pxc_crash_in_last():
                          "successTrackId," \
                          "daysLastCrashed," \
                          "assetId," \
+                         "assetUniqueId," \
                          "assetName," \
                          "productId," \
                          "productFamily," \
@@ -5633,6 +5638,7 @@ def pxc_crash_in_last():
                             for item in items:
                                 assetId = str(item['assetId']).replace(",", "_")
                                 assetName = str(item['assetName']).replace(",", " ")
+                                assetUniqueId = str(item['assetUniqueId']).replace(",", " ")
                                 productId = str(item['productId']).replace(",", " ")
                                 productFamily = str(item['productFamily']).replace(",", " ")
                                 softwareRelease = str(item['softwareRelease']).replace(",", " ")
@@ -5652,6 +5658,7 @@ def pxc_crash_in_last():
                                                 successTrackId + ',' +
                                                 str(daysLastCrashed) + ',' +
                                                 assetId + ',' +
+                                                assetUniqueId + ',' +
                                                 assetName + ',' +
                                                 productId + ',' +
                                                 productFamily + ',' +
@@ -5692,7 +5699,7 @@ def pxc_asset_crash_history():
             CSV_Header = "customerId," \
                          "customerName," \
                          "successTrackId," \
-                         "assetId," \
+                         "assetUniqueId," \
                          "resetReason," \
                          "timeStamp"
             writer = csv.writer(target, delimiter=' ', quotechar=' ', quoting=csv.QUOTE_NONE)

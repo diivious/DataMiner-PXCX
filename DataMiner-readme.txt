@@ -1,4 +1,1 @@
-#1. Added Paging to Customers API Calls
-#2. Added Paging to Contracts API Calls
-#3. Fix storing illeagal character, (") the quote symbol, in the customer name
-#4. Resolved issue of overwriting JSON files with identical JSON files when customer has duplicate records for the same contract ID
+1. Added assetUniqueId to all of the CSV output for crash risk API endpoints
