@@ -156,7 +156,7 @@ Version Features and enhancements
     B. pxc_fault_days = "30"  # Used for Making API Request for number of days in report (default is 30)
     C. max_items = "50"  # Used for the maximum number of items to return in report (max and default is 50)
     D. debug_level = 0  # Used for setting a debug level (0,1,2) default is 0
-    E. log_to_file = False  # send all screen logging to a file (True, False) default is False
+    E. log_to_file = 0  # send all screen logging to a file (1=True, 2=False) default is 2
     F. testLoop = 1  # test the code by running through the entire sequence x times... (default is 1)
     G. outputFormat = 1  # generate output in the form of Both, JSON or CSV. 1=Both 2=JSON 3=CSV
 10. Changed the CSV File names to be consistent between all the CSV's
@@ -235,7 +235,7 @@ pxc_url_crash_risk_assets_last_crashed = pxc_url_crash_risk + "sCrashed"
 pxc_url_crash_risk_asset_crash_history = "/crashHistory"
 
 # Data File Variables
-codeVersion = str("1.0.0.15")
+codeVersion = str("1.0.0.16")
 configFile = "config.ini"
 csv_output_dir = "outputcsv/"
 json_output_dir = "outputjson/"
@@ -301,10 +301,10 @@ pxc_fault_days = "30"  # Used for Making API Request for number of days in repor
 max_items = "50"  # Used for the maximum number of items to return in report (max and default is 50)
 debug_level = 0  # Used for setting a debug level (0 = Low,1 = Medium,2 = High) default is 0
 logLevel = "low"  # Text description of log level, default is Low
-log_to_file = False  # send all screen logging to a file (True, False) default is False
-testLoop = 1  # test the code by running through the entire sequence x times... (default is 1)
-outputFormat = "1"  # generate output in the form of Both, JSON or CSV. 1=Both 2=JSON 3=CSV
-useProductionURL = True  # if true, use production URL, if false, use sandbox URL
+log_to_file = 0  # send all screen logging to a file (1=True, 0=False) default is 0
+testLoop = 1  # test the code by running through the entire sequence x times. Default is 1
+outputFormat = 1  # generate output in the form of Both, JSON or CSV. 1=Both 2=JSON 3=CSV
+useProductionURL = 1  # if true, use production URL, if false, use sandbox URL (1=True 2=False) Default is 1
 '''
 Begin defining functions
 =======================================================================
@@ -329,7 +329,7 @@ def location_ready_status(location, headers):
             break
         nextPoll = int(response.json().get('suggestedNextPollTimeInMins', 1))
         print(f'API Requested {nextPoll} minute(s) for report to complete...')
-        time.sleep(nextPoll * 60)
+        time.sleep(nextPoll * 10)
     print('Downloading Report...')
     return location
 
@@ -368,10 +368,10 @@ def load_config():
         pxc_fault_days = int((config['settings']["pxc_fault_days"]))
         max_items = (config['settings']["max_items"])
         debug_level = int((config['settings']["debug_level"]))
-        log_to_file = (config['settings']["log_to_file"])
+        log_to_file = int(config['settings']["log_to_file"])
         testLoop = int((config['settings']["testLoop"]))
         outputFormat = int((config['settings']["outputFormat"]))
-        useProductionURL = (config['settings']["useProductionURL"])
+        useProductionURL = int(config['settings']["useProductionURL"])
 
     else:
         print('Config.ini not found!!!!!!!!!!!!\nCreating config.ini...')
@@ -386,21 +386,21 @@ def load_config():
         config.add_section('settings')
         config.set("settings", "# Time to wait between errors in seconds, default", "1")
         config.set("settings", "wait_time", "1")
-        config.set("settings", "# The number of days to retrieve fault data for. This value can be 1, 7, 15, 30, "
+        config.set("settings", "# The number of days to retrieve fault data for. This value can be 1, 7, 15, 30. "
                                "default", "30")
         config.set("settings", "pxc_fault_days", "30")
-        config.set("settings", "# The maximum number of items to return per API call, maximum", "50")
+        config.set("settings", "# The maximum number of items to return per API call maximum is 50, default ", "50")
         config.set("settings", "max_items", "50")
         config.set("settings", "# Used for setting a debug level (0 = Low, 1 = Medium, 2 = High), default", "0")
         config.set("settings", "debug_level", "0")
-        config.set("settings", "# # send all screen logging to a file (True, False), default", "False")
-        config.set("settings", "log_to_file", "False")
+        config.set("settings", "# send all screen logging to a file (1=True, 0=False), default", "0")
+        config.set("settings", "log_to_file", "0")
         config.set("settings", "# test the code by running through the entire sequence x times..., default", "1")
         config.set("settings", "testLoop", "1")
         config.set("settings", "# generate output in the form of Both, JSON or CSV. 1=Both 2=JSON 3=CSV, default", "1")
         config.set("settings", "outputFormat", "1")
-        config.set("settings", "# to use the Sandbox set useProductionURL", "False")
-        config.set("settings", "useProductionURL", "True")
+        config.set("settings", "# use production url (1=true 0=false) if false, use sandbox url, default", "1")
+        config.set("settings", "useProductionURL", "1")
         with open(configFile, 'w') as configfile:
             config.write(configfile)
         exit()
@@ -687,9 +687,13 @@ def get_pxc_contracts():
                 except KeyError:
                     cavid = "N/A"
                     pass
+                try:
+                    customerNameTemp = str(item['customerName'].replace('"', ','))
+                except KeyError:
+                    customerNameTemp = "N/A"
+                    pass
                 contractStatus = str(item['contractStatus'])
                 contractValue = str(item['contractValue'])
-                customerNameTemp = str(item['customerName'].replace('"', ','))
                 customerName = customerNameTemp.replace(',', ' ')
                 currency = str(item['currency'])
                 serviceLevel = str(item['serviceLevel'].replace(",", "|"))
@@ -1487,7 +1491,7 @@ def pxc_assets_reports():
                             break
                         finally:
                             tries += 1
-                    if useProductionURL == "True":
+                    if useProductionURL == 1:
                         input_json_file = str(temp_dir + customerId + "_Assets_" + json_filename)
                     else:
                         input_json_file = str(temp_dir + json_filename)
@@ -1856,7 +1860,7 @@ def pxc_hardware_reports():
                             break
                         finally:
                             tries += 1
-                    if useProductionURL == "True":
+                    if useProductionURL == 1:
                         input_json_file = str(temp_dir + customerId + "_Hardware_" + json_filename)
                     else:
                         input_json_file = str(temp_dir + json_filename)
@@ -2099,7 +2103,7 @@ def pxc_software_reports():
                             break
                         finally:
                             tries += 1
-                    if useProductionURL == "True":
+                    if useProductionURL == 1:
                         input_json_file = str(temp_dir + customerId + "_Software_" + json_filename)
                     else:
                         input_json_file = str(temp_dir + json_filename)
@@ -2318,7 +2322,7 @@ def pxc_purchased_licenses_reports():
                             break
                         finally:
                             tries += 1
-                    if useProductionURL == "True":
+                    if useProductionURL == 1:
                         input_json_file = str(temp_dir + customerId + "_PurchasedLicenses_" + json_filename)
                     else:
                         input_json_file = str(temp_dir + json_filename)
@@ -2531,7 +2535,7 @@ def pxc_licenses_reports():
                             break
                         finally:
                             tries += 1
-                    if useProductionURL == "True":
+                    if useProductionURL == 1:
                         input_json_file = str(temp_dir + customerId + "_Licenses_" + json_filename)
                     else:
                         input_json_file = str(temp_dir + json_filename)
@@ -2771,7 +2775,7 @@ def pxc_security_advisories_reports():
                             break
                         finally:
                             tries += 1
-                    if useProductionURL == "True":
+                    if useProductionURL == 1:
                         input_json_file = str(temp_dir + customerId + "_SecurityAdvisories_" + json_filename)
                     else:
                         input_json_file = str(temp_dir + json_filename)
@@ -3006,7 +3010,7 @@ def pxc_field_notices_reports():
                             break
                         finally:
                             tries += 1
-                    if useProductionURL == "True":
+                    if useProductionURL == 1:
                         input_json_file = str(temp_dir + customerId + "_FieldNotices_" + json_filename)
                     else:
                         input_json_file = str(temp_dir + json_filename)
@@ -3237,7 +3241,7 @@ def pxc_priority_bugs_reports():
                             break
                         finally:
                             tries += 1
-                    if useProductionURL == "True":
+                    if useProductionURL == 1:
                         input_json_file = str(temp_dir + customerId + "_PriorityBugs_" + json_filename)
                     else:
                         input_json_file = str(temp_dir + json_filename)
@@ -5940,7 +5944,7 @@ Begin main application control
 # call function to load config.ini data into variables
 load_config()
 # clear log folder before the script runs if logging is enabled
-if log_to_file == "True" or log_to_file == "true":
+if log_to_file == 1:
     if outputFormat == 1:
         print("Saving data in JSON and CSV formats")
     if outputFormat == 2:
@@ -5953,13 +5957,11 @@ if log_to_file == "True" or log_to_file == "true":
     else:
         os.mkdir(log_output_dir)
 # Set URL to Sandbox if useProductionURL is false
-if useProductionURL == "False" or useProductionURL == "false":
-    useProductionURL = "False"
+if useProductionURL == 0:
     pxc_url_base = urlProtocol + urlHost + urlLinkSandbox
     pxc_scope = "api.customer.assets.manage"
     environment = "Sandbox"
-elif useProductionURL == "True" or useProductionURL == "true":
-    useProductionURL = "True"
+elif useProductionURL == 1:
     pxc_url_base = urlProtocol + urlHost + urlLink
     pxc_scope = "api.authz.iam.manage"
     environment = "Production"
@@ -5979,7 +5981,7 @@ for x in range(0, testLoop):
         logLevel = "Medium"
     elif debug_level == 2:
         logLevel = "High"
-    if log_to_file == "True" or log_to_file == "true":
+    if log_to_file == 1:
         print(f"Logging output to file PXCloud_##.log with debug level set to {logLevel} for version {codeVersion}")
         sys.stdout = open(log_output_dir + 'PXCLoud_' + str(x + 1) + '.log', 'wt')
     startTime = time.time()
