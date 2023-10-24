@@ -1,2 +1,5 @@
-1. Bug fixed - Contracts and ContractsWithNames functions was generating empty JSON Files. Missing the dump json call in those two functions. CSV files where not affected.
+1. Bug fixed - Sandbox returned a different exit code than production
+2. Bug fixed - Sandbox bulk file naming convention changed breaking bulk report processing.
+3. Changed the defaults in the config.ini and added more notes to clairify the expected values
+
 
