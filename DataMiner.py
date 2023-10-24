@@ -235,7 +235,7 @@ pxc_url_crash_risk_assets_last_crashed = pxc_url_crash_risk + "sCrashed"
 pxc_url_crash_risk_asset_crash_history = "/crashHistory"
 
 # Data File Variables
-codeVersion = str("1.0.0.16")
+codeVersion = str("1.0.0.18")
 configFile = "config.ini"
 csv_output_dir = "outputcsv/"
 json_output_dir = "outputjson/"
@@ -325,13 +325,20 @@ def location_ready_status(location, headers):
         print('Checking report ready status')
         response = requests.get(location, headers=headers, allow_redirects=False)
         response.raise_for_status()
-        if response.status_code == 303:
+        if response.status_code == 303 or response.status_code == 302:
             break
         nextPoll = int(response.json().get('suggestedNextPollTimeInMins', 1))
         print(f'API Requested {nextPoll} minute(s) for report to complete...')
         time.sleep(nextPoll * 10)
     print('Downloading Report...')
     return location
+
+
+def proccess_sandbox_files(filename, customerid, reportid, json_filename):
+    with zipfile.ZipFile(filename, mode="r") as archive:
+        for jsonfile in archive.namelist():
+            print(f'Correcting Sandbox file name')
+            os.rename((temp_dir + jsonfile), (temp_dir + customerid + reportid + json_filename))
 
 
 # Function to load configuration from config.ini and continue or create a template if not found and exit
@@ -377,12 +384,18 @@ def load_config():
         print('Config.ini not found!!!!!!!!!!!!\nCreating config.ini...')
         print('\nNOTE: you must edit the config.ini file with your information\nExiting...')
         config.add_section('credentials')
-        config.set("credentials", "pxc_client_id", "PX Cloud API Client ID")
-        config.set("credentials", "pxc_client_secret", "PX Cloud API Client Secret")
-        config.set("credentials", "s3access_key", "AWS S3 Access Key")
-        config.set("credentials", "s3access_secret", "AWS S3 Client Secret")
-        config.set("credentials", "s3bucket_folder", "AWS S3 Bucket Folder")
-        config.set("credentials", "s3bucket_name", "AWS S3 Bucket Name")
+        config.set("credentials", "pxc_client_id", "")
+        config.set("credentials", "# PX Cloud API Client ID  Default is blank", "")
+        config.set("credentials", "pxc_client_secret", "")
+        config.set("credentials", "# PX Cloud API Client Secret  Default is blank", "")
+        config.set("credentials", "s3access_key", "")
+        config.set("credentials", "# AWS S3 Access Key Default is blank", "")
+        config.set("credentials", "s3access_secret", "")
+        config.set("credentials", "# AWS S3 Client Secret  Default is blank", "")
+        config.set("credentials", "s3bucket_folder", "")
+        config.set("credentials", "# AWS S3 Bucket Folder  Default is blank", "")
+        config.set("credentials", "s3bucket_name", "")
+        config.set("credentials", "# AWS S3 Bucket Name  Default is blank", "")
         config.add_section('settings')
         config.set("settings", "# Time to wait between errors in seconds, default", "1")
         config.set("settings", "wait_time", "1")
@@ -822,7 +835,7 @@ def get_pxc_contractswithcustomers():
                 except KeyError:
                     successTrackIds = ""
                 for successTrackId in successTrackIds:
-                    print(f"Found contract number {contractNumber} for {customerName}")
+                    print(f"Found contract number {contractNumber} for {customerGUName}")
                     CSV_Data = (customerName + ',' +
                                 customerId + ',' +
                                 contractNumber + ',' +
@@ -1459,7 +1472,7 @@ def pxc_assets_reports():
                     while True:
                         time.sleep(wait_time * tries)
                         print("Scanning for data...")
-                        filename = (temp_dir + location.split('/')[-1] + '.zip')
+                        filename = (temp_dir + customerId + "_Assets_" + location.split('/')[-1] + '.zip')
                         headers = {'Authorization': f'Bearer {token}'}
                         response = requests.request("GET", location, headers=headers, data=payload)
                         if debug_level == 2:
@@ -1480,7 +1493,6 @@ def pxc_assets_reports():
                                 else:
                                     print("\nDownload Failed")
                                     raise Exception("File Corrupted")
-                            # os.remove(filename)
                         except Exception as FileCorruptError:
                             if debug_level == 2:
                                 print("\nDeleting file..." + str(filename) + " " +
@@ -1493,10 +1505,9 @@ def pxc_assets_reports():
                             break
                         finally:
                             tries += 1
-                    if useProductionURL == 1:
-                        input_json_file = str(temp_dir + customerId + "_Assets_" + json_filename)
-                    else:
-                        input_json_file = str(temp_dir + json_filename)
+                    if useProductionURL == 0:
+                        proccess_sandbox_files(filename, customerId, "_Assets_", json_filename)
+                    input_json_file = str(temp_dir + customerId + "_Assets_" + json_filename)
                     if debug_level == 1 or debug_level == 2:
                         print(f"\nReading file:{input_json_file}")
                     if not os.path.isfile(input_json_file):
@@ -1711,7 +1722,9 @@ def pxc_assets_reports():
                             if totalCount > 0:
                                 print(f"Saving {json_output_dir}{customerId}_Assets_{json_filename}")
                                 shutil.copy(input_json_file, json_output_dir)
-                            os.remove(input_json_file)
+                        # Cleanup temp files
+                        os.remove(input_json_file)
+                        os.remove(filename)
             else:
                 print(f"No Asset Data Found for Success Track {successTrackId}"
                       f"\nSkipping this record and continuing....")
@@ -1862,10 +1875,9 @@ def pxc_hardware_reports():
                             break
                         finally:
                             tries += 1
-                    if useProductionURL == 1:
-                        input_json_file = str(temp_dir + customerId + "_Hardware_" + json_filename)
-                    else:
-                        input_json_file = str(temp_dir + json_filename)
+                    if useProductionURL == 0:
+                        proccess_sandbox_files(filename, customerId, "_Hardware_", json_filename)
+                    input_json_file = str(temp_dir + customerId + "_Hardware_" + json_filename)
                     if debug_level == 1 or debug_level == 2:
                         print(f"\nReading file:{input_json_file}")
                     if not os.path.isfile(input_json_file):
@@ -1960,7 +1972,9 @@ def pxc_hardware_reports():
                             if totalCount > 0:
                                 print(f"Saving {json_output_dir}{customerId}_Hardware_{json_filename}")
                                 shutil.copy(input_json_file, json_output_dir)
-                            os.remove(input_json_file)
+                        # Cleanup temp files
+                        os.remove(input_json_file)
+                        os.remove(filename)
             else:
                 print(f"No Hardware Data Found for Success Track {successTrackId}"
                       f"\nSkipping this record and continuing....")
@@ -2105,10 +2119,9 @@ def pxc_software_reports():
                             break
                         finally:
                             tries += 1
-                    if useProductionURL == 1:
-                        input_json_file = str(temp_dir + customerId + "_Software_" + json_filename)
-                    else:
-                        input_json_file = str(temp_dir + json_filename)
+                    if useProductionURL == 0:
+                        proccess_sandbox_files(filename, customerId, "_Software_", json_filename)
+                    input_json_file = str(temp_dir + customerId + "_Software_" + json_filename)
                     if debug_level == 1 or debug_level == 2:
                         print("\nReading file:", input_json_file)
                     if not os.path.isfile(input_json_file):
@@ -2183,7 +2196,9 @@ def pxc_software_reports():
                             if totalCount > 0:
                                 print(f"Saving {json_output_dir}{customerId}_Software_{json_filename}")
                                 shutil.copy(input_json_file, json_output_dir)
-                            os.remove(input_json_file)
+                        # Cleanup temp files
+                        os.remove(input_json_file)
+                        os.remove(filename)
             else:
                 print(f"No Software Data Found For Success Track {successTrackId}"
                       f"\nSkipping this record and continuing....")
@@ -2324,10 +2339,9 @@ def pxc_purchased_licenses_reports():
                             break
                         finally:
                             tries += 1
-                    if useProductionURL == 1:
-                        input_json_file = str(temp_dir + customerId + "_PurchasedLicenses_" + json_filename)
-                    else:
-                        input_json_file = str(temp_dir + json_filename)
+                    if useProductionURL == 0:
+                        proccess_sandbox_files(filename, customerId, "_PurchasedLicenses_", json_filename)
+                    input_json_file = str(temp_dir + customerId + "_PurchasedLicenses_" + json_filename)
                     if debug_level == 1 or debug_level == 2:
                         print(f"\nReading file:{input_json_file}")
                     if not os.path.isfile(input_json_file):
@@ -2390,7 +2404,9 @@ def pxc_purchased_licenses_reports():
                             if totalCount > 0:
                                 print(f"Saving {json_output_dir}{customerId}_Purchased Licenses_{json_filename}")
                                 shutil.copy(input_json_file, json_output_dir)
-                            os.remove(input_json_file)
+                        # Cleanup temp files
+                        os.remove(input_json_file)
+                        os.remove(filename)
             else:
                 print(f"No Purchased Licenses Data Found For Success Track {successTrackId}"
                       f"\nSkipping this record and continuing....")
@@ -2537,10 +2553,9 @@ def pxc_licenses_reports():
                             break
                         finally:
                             tries += 1
-                    if useProductionURL == 1:
-                        input_json_file = str(temp_dir + customerId + "_Licenses_" + json_filename)
-                    else:
-                        input_json_file = str(temp_dir + json_filename)
+                    if useProductionURL == 0:
+                        proccess_sandbox_files(filename, customerId, "_Licenses_", json_filename)
+                    input_json_file = str(temp_dir + customerId + "_Licenses_" + json_filename)
                     if debug_level == 1 or debug_level == 2:
                         print(f"\nReading file:{input_json_file}")
                     if not os.path.isfile(input_json_file):
@@ -2624,7 +2639,9 @@ def pxc_licenses_reports():
                             if totalCount > 0:
                                 print(f"Saving JSON file for customer {customerName} on success track {successTrackId}")
                                 shutil.copy(input_json_file, json_output_dir)
-                            os.remove(input_json_file)
+                        # Cleanup temp files
+                        os.remove(input_json_file)
+                        os.remove(filename)
             else:
                 print(f"No License Data Found For Success Track {successTrackId}"
                       f"\nSkipping this record and continuing....")
@@ -2777,10 +2794,9 @@ def pxc_security_advisories_reports():
                             break
                         finally:
                             tries += 1
-                    if useProductionURL == 1:
-                        input_json_file = str(temp_dir + customerId + "_SecurityAdvisories_" + json_filename)
-                    else:
-                        input_json_file = str(temp_dir + json_filename)
+                    if useProductionURL == 0:
+                        proccess_sandbox_files(filename, customerId, "_SecurityAdvisories_", json_filename)
+                    input_json_file = str(temp_dir + customerId + "_SecurityAdvisories_" + json_filename)
                     if debug_level == 1 or debug_level == 2:
                         print(f"\nReading file:{input_json_file}")
                     if not os.path.isfile(input_json_file):
@@ -2862,7 +2878,9 @@ def pxc_security_advisories_reports():
                             if totalCount > 0:
                                 print(f"Saving {json_output_dir}{customerId}_SecurityAdvisories_{json_filename}")
                                 shutil.copy(input_json_file, json_output_dir)
-                            os.remove(input_json_file)
+                        # Cleanup temp files
+                        os.remove(input_json_file)
+                        os.remove(filename)
             else:
                 print(f"No Security Advisories Data Found For Success Track {successTrackId}"
                       f"\nSkipping this record and continuing....")
@@ -3012,10 +3030,9 @@ def pxc_field_notices_reports():
                             break
                         finally:
                             tries += 1
-                    if useProductionURL == 1:
-                        input_json_file = str(temp_dir + customerId + "_FieldNotices_" + json_filename)
-                    else:
-                        input_json_file = str(temp_dir + json_filename)
+                    if useProductionURL == 0:
+                        proccess_sandbox_files(filename, customerId, "_FieldNotices_", json_filename)
+                    input_json_file = str(temp_dir + customerId + "_FieldNotices_" + json_filename)
                     if debug_level == 1 or debug_level == 2:
                         print(f"\nReading file:{input_json_file}")
                     if not os.path.isfile(input_json_file):
@@ -3098,7 +3115,9 @@ def pxc_field_notices_reports():
                         if totalCount > 0:
                             print(f"Saving {json_output_dir}{customerId}_FieldNotices_{json_filename}")
                             shutil.copy(input_json_file, json_output_dir)
-                        os.remove(input_json_file)
+                            # Cleanup temp files
+                            os.remove(input_json_file)
+                            os.remove(filename)
             else:
                 print(f"No Field Notice Data Found For Success Track {successTrackId}"
                       f"\nSkipping this record and continuing....")
@@ -3243,10 +3262,9 @@ def pxc_priority_bugs_reports():
                             break
                         finally:
                             tries += 1
-                    if useProductionURL == 1:
-                        input_json_file = str(temp_dir + customerId + "_PriorityBugs_" + json_filename)
-                    else:
-                        input_json_file = str(temp_dir + json_filename)
+                    if useProductionURL == 0:
+                        proccess_sandbox_files(filename, customerId, "_PriorityBugs_", json_filename)
+                    input_json_file = str(temp_dir + customerId + "_PriorityBugs_" + json_filename)
                     if debug_level == 1 or debug_level == 2:
                         print(f"\nReading file:{input_json_file}")
                     if not os.path.isfile(input_json_file):
@@ -3314,7 +3332,9 @@ def pxc_priority_bugs_reports():
                         if totalCount > 0:
                             print(f"Saving {json_output_dir}{customerId}_PriorityBugs_{json_filename}")
                             shutil.copy(input_json_file, json_output_dir)
-                        os.remove(input_json_file)
+                            # Cleanup temp files
+                            os.remove(input_json_file)
+                            os.remove(filename)
             else:
                 print(f"No Priority Bug Data Found For Success Track {successTrackId}"
                       f"{successTrackId}\nSkipping this record and continuing....")
@@ -3323,6 +3343,7 @@ def pxc_priority_bugs_reports():
         now = datetime.now()
         print('Stop DateTime:', now)
     print("====================\n")
+    exit()
 
 
 # Function to get the Lifecycle data from PX Cloud
