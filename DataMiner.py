@@ -201,11 +201,13 @@ datetime for posting time stamps in the logging
 # Generic URL Variables
 pxc_token_url = "https://id.cisco.com/oauth2/aus1o4emxorc3wkEe5d7/v1/token"
 urlProtocol = "https://"
+pxc_url_base = ""
 urlHost = "api-cx.cisco.com/"
 urlLink = "px/v1/"
 urlLinkSandbox = "sandbox/px/v1/"
 grant_type = "client_credentials"
 pxc_cache_control = "no-cache"
+environment = ""
 
 # Customer and Analytics Insights URL Variables
 pxc_url_lifecycle = "/lifecycle"
@@ -233,7 +235,7 @@ pxc_url_crash_risk_assets_last_crashed = pxc_url_crash_risk + "sCrashed"
 pxc_url_crash_risk_asset_crash_history = "/crashHistory"
 
 # Data File Variables
-codeVersion = str("1.0.0.11")
+codeVersion = str("1.0.0.12")
 configFile = "config.ini"
 csv_output_dir = "outputcsv/"
 json_output_dir = "outputjson/"
@@ -312,8 +314,8 @@ def token_time_check():
     checkTime = time.time()
     tokenTime = math.ceil(int(checkTime - tokenStartTime) / 60)
     if debug_level == 1 or debug_level == 2:
-        print(f"Check Time is {checkTime}\nToken Start Time is {tokenStartTime}\nToken time is :{tokenTime} minutes")
-    if tokenTime > 60:
+        print(f"Token time is :{tokenTime} minutes")
+    if tokenTime > 110:
         get_pxc_token()
 
 
@@ -461,12 +463,24 @@ def get_pxc_token():
     }
     response = requests.request("POST", url, headers=headers, data=payload)
     reply = json.loads(response.text)
-    token = (reply["access_token"])
+    try:
+        token = (reply["access_token"])
+    except KeyError:
+        token = ""
+        pass
     tokenStartTime = time.time()
     if debug_level == 1 or debug_level == 2:
-        print("API Token: ", token)
-    print("Done!")
-    print("====================\n\n")
+        print(f"API Token:{token}")
+    if len(token) > 0:
+        print("Done!")
+        print("====================\n\n")
+    else:
+        print("Unable to retrieve a valid token\n"
+              "Check config.ini and ensure your API Keys and if your using the Sandbox or Production for accuracy")
+        print(f"Client ID: {pxc_client_id}")
+        print(f"Client Secret: {pxc_client_secret}")
+        print(f"Production APIs? : {useProductionURL}")
+        exit()
 
 
 # Function to get the raw API JSON data from PX Cloud
@@ -475,6 +489,7 @@ def get_json_reply(url, tag):
     response = []
     while True:
         try:
+            token_time_check()
             headers = {
                 'Authorization': f'Bearer {token}'
             }
@@ -546,7 +561,6 @@ def get_json_reply(url, tag):
 # CSV Naming Convention: Customer.csv
 # JSON Naming Convention: Customers_Page_{page}_of_{total}.json
 def get_pxc_customers():
-    token_time_check()
     print("******************************************************************")
     print("****************** Running Customer Report ***********************")
     print("******************************************************************")
@@ -555,6 +569,9 @@ def get_pxc_customers():
         now = datetime.now()
         print('Start DateTime:', now)
     totalCount = (get_json_reply(url=(pxc_url_customers + "?max=" + max_items), tag="totalCount"))
+    if not totalCount:
+        print("No Customers found...., exiting....")
+        exit()
     pages = math.ceil(totalCount / int(max_items))
     page = 0
     with open(customers, 'w', encoding="utf-8", newline='') as target:
@@ -601,7 +618,7 @@ def get_pxc_customers():
     if debug_level == 1 or debug_level == 2:
         now = datetime.now()
         print('Stop DateTime:', now)
-    print("====================\n\n")
+    print("====================\n")
 
 
 # Function to get the Contract List from PX Cloud
@@ -609,11 +626,10 @@ def get_pxc_customers():
 # CSV Naming Convention: Contract.csv
 # JSON Naming Convention: Contracts_Page_{page}_of_{total}.json
 def get_pxc_contracts():
-    token_time_check()
     print("******************************************************************")
     print("****************** Running Contract Report ***********************")
     print("******************************************************************")
-    print("Searching ......\n", end="")
+    print("Searching ......")
     if debug_level == 1 or debug_level == 2:
         now = datetime.now()
         print('Start DateTime:', now)
@@ -636,6 +652,7 @@ def get_pxc_contracts():
         writer = csv.writer(target, delimiter=' ', quotechar=' ', quoting=csv.QUOTE_NONE)
         writer.writerow(CSV_Header.split())
         while page < pages:
+            token_time_check()
             off_set = (page * int(max_items))
             url = (pxc_url_contracts +
                    "?offset=" + str(off_set) +
@@ -720,7 +737,7 @@ def get_pxc_contracts():
         now = datetime.now()
         print('Stop DateTime:', now)
     print("\nSearch Completed!")
-    print("====================\n\n")
+    print("====================\n")
 
 
 # Function to get the Contract List from PX Cloud
@@ -728,11 +745,10 @@ def get_pxc_contracts():
 # CSV Naming Convention: Contract_Details.csv
 # JSON Naming Convention: {Customer Name}_Contract_Details_{ContractNumber}_Page_{page}_of_{total}.json
 def get_pxc_contracts_details():
-    token_time_check()
     print("******************************************************************")
     print("****************** Running Contract Details **********************")
     print("******************************************************************")
-    print("Searching ......", end="")
+    print("Searching ......")
     if debug_level == 1 or debug_level == 2:
         now = datetime.now()
         print('Start DateTime:', now)
@@ -756,14 +772,23 @@ def get_pxc_contracts_details():
     with open(csv_output_dir + 'unique_contracts.csv', 'r') as target:
         contractList = csv.DictReader(target)
         for row in contractList:
+            token_time_check()
             customerName = row["customerName"].replace(",", " ")
             contractNumber = row["contractNumber"]
             headers = {'Authorization': f'Bearer {token}'}
             url = (pxc_url_contracts_details +
-                   "?contractNumber=" + contractNumber
+                   "?contractNumber=" + contractNumber +
+                   "&offset=0&max=50"
                    )
+            print(f"\nScanning {customerName}")
             response = requests.request("GET", url, headers=headers, data=payload, verify=True)
             reply = json.loads(response.text)
+            if debug_level == 1 or debug_level == 2:
+                print("\nURL Request:", url,
+                      "\nHTTP Code:", response.status_code,
+                      "\nReview API Headers:", response.headers,
+                      "\nResponse Body:", response.content,
+                      "\n====================")
             try:
                 if response.status_code == 200:
                     totalCount = reply["totalCount"]
@@ -778,7 +803,9 @@ def get_pxc_contracts_details():
                               "\n====================")
                     page = 0
                     if totalCount > 0:
-                        print(f"\nFound details on contract number {contractNumber} for {customerName}")
+                        print(f"Found details on contract number {contractNumber}")
+                    if totalCount < 1:
+                        print(f"No details found on contract number {contractNumber}")
                     while page < pages:
                         off_set = (page * int(max_items))
                         url = (pxc_url_contracts_details +
@@ -794,7 +821,7 @@ def get_pxc_contracts_details():
                                                  "_Contract_Details_" + contractNumber +
                                                  "_Page_" + str(page + 1) +
                                                  "_of_" + str(pages) +
-                                                 ".json")
+                                                 ".json").replace('/', '-')
                                     if not os.path.isfile(json_file):
                                         with open(json_file, 'w') as fileTarget:
                                             json.dump(items, fileTarget)
@@ -846,7 +873,7 @@ def get_pxc_contracts_details():
     if debug_level == 1 or debug_level == 2:
         now = datetime.now()
         print('Stop DateTime:', now)
-    print("====================\n\n")
+    print("====================\n")
 
 
 # Function to get the Partner Offers from PX Cloud
@@ -854,7 +881,6 @@ def get_pxc_contracts_details():
 # CSV Naming Convention: Partner_Offers.csv
 # JSON Naming Convention: Partner_Offers.json
 def get_pxc_partner_offers():
-    token_time_check()
     print("******************************************************************")
     print("**************** Running All Partner Offers **********************")
     print("******************************************************************")
@@ -910,7 +936,11 @@ def get_pxc_partner_offers():
                     description = str(item['description']).replace(",", " ")
                     duration = str(item['duration'])
                     accTimeRequiredHours = str(item['accTimeRequiredHours'])
-                    imageFileName = str(item['imageFileName']).replace(",", " ")
+                    try:
+                        imageFileName = str(item['imageFileName']).replace(",", " ")
+                    except KeyError:
+                        imageFileName = "None"
+                        pass
                     customerRating = str(item['customerRating'])
                     status = str(item['status']).replace(",", " ")
                     userFirstName = str(item['userFirstName']).replace(",", " ")
@@ -995,7 +1025,7 @@ def get_pxc_partner_offers():
     if debug_level == 1 or debug_level == 2:
         now = datetime.now()
         print('Stop DateTime:', now)
-    print("====================\n\n")
+    print("====================\n")
 
 
 # Function to get the Partner Offer Sessions from PX Cloud
@@ -1003,7 +1033,6 @@ def get_pxc_partner_offers():
 # CSV Naming Convention: Partner_Offer_Sessions.csv
 # JSON Naming Convention: Partner_Offer_Sessions.json
 def get_pxc_partner_offer_sessions():
-    token_time_check()
     print("******************************************************************")
     print("************** Running All Partner Offers Sessions ***************")
     print("******************************************************************")
@@ -1113,15 +1142,14 @@ def get_pxc_partner_offer_sessions():
     if debug_level == 1 or debug_level == 2:
         now = datetime.now()
         print('Stop DateTime:', now)
-    print("====================\n\n")
+    print("====================\n")
 
 
 # Function to get the Success Track data from PX Cloud
 # This API will get customer success tracks which will provide the usecase details.
 # CSV Naming Convention: SuccessTracks.csv
 # JSON Naming Convention: SuccessTracks.json
-def get_pxc_succsstracks():
-    token_time_check()
+def get_pxc_successtracks():
     print("******************************************************************")
     print("******************** Running Success Track ***********************")
     print("******************************************************************")
@@ -1185,7 +1213,7 @@ def get_pxc_succsstracks():
     if debug_level == 1 or debug_level == 2:
         now = datetime.now()
         print('Stop DateTime:', now)
-    print("====================\n\n")
+    print("====================\n")
 
 
 # Function to request, download and process Asset report data from PX Cloud
@@ -1193,11 +1221,10 @@ def get_pxc_succsstracks():
 # CSV Naming Convention: Assets.csv
 # JSON Naming Convention: {Customer ID}_Assets_{UniqueReportID}.json
 def pxc_assets_reports():
-    token_time_check()
     print("******************************************************************")
     print("********************* Running Asset Report ***********************")
     print("******************************************************************")
-    print("Searching ......\n", end="")
+    print("Searching ......")
     if debug_level == 1 or debug_level == 2:
         now = datetime.now()
         print('Start DateTime:', now)
@@ -1256,11 +1283,9 @@ def pxc_assets_reports():
             customerId = row['customerId']
             successTrackId = row['successTrackId']
             customerName = row['customerName']
-            if debug_level == 1 or debug_level == 2:
-                print("====================\n\n")
-                print("Asset data for Customer:", customerName,
-                      "on Success Tracks:", successTrackId)
+            print(f"\nScanning Asset data for {customerName}")
             if not successTrackId == "N/A":
+                token_time_check()
                 url = (pxc_url_customers + "/" + customerId + "/reports")
                 data_payload = json.dumps({"reportName": "Assets", "successTrackId": successTrackId})
                 headers = {'Authorization': f'Bearer {token}'}
@@ -1277,298 +1302,306 @@ def pxc_assets_reports():
                           "\nHTTP Code:", response.status_code,
                           "\nReview API Headers:", response.headers,
                           "\nResponse Body:", response.content)
-                try:
-                    if bool(response.headers["location"]) is True:
-                        pass
-                    else:
-                        raise KeyError
-                except KeyError:
-                    print("\n!!!!!!!!\nException Thrown for", "Customer:",
-                          customerId, "on Success Tracks:", successTrackId,
-                          "Report Failed to Download\n")
-                    print("Report request URL:", url,
-                          "\nReport details:", data_payload,
-                          "\nHTTP Code:", response.status_code,
-                          "\nReview API Headers:", response.headers,
-                          "\nResponse Body:", response.content)
-                    while response.status_code >= 400:
-                        print(f"Pausing for {wait_time} seconds before re-request...")
-                        time.sleep(wait_time)
-                        print("Resuming...")
-                        print("Making API Call again with the following...")
-                        print("URL: ", url)
-                        print("Data Payload: ", data_payload)
-                        response = requests.request(
-                            "POST",
-                            url,
-                            headers=headers,
-                            data=data_payload,
-                            verify=True
-                        )
+                if response.text.__contains__("Customer admin has not provided access."):
+                    print("Customer admin has not provided access.")
+                if not (response.text.__contains__("Customer admin has not provided access.")):
+                    try:
+                        if bool(response.headers["location"]) is True:
+                            pass
+                        else:
+                            raise KeyError
+                    except KeyError:
+                        print("\n!!!!!!!!\nException Thrown for", "Customer:",
+                              customerId, "on Success Track", successTrackId,
+                              "Report Failed to Download\n")
                         print("Report request URL:", url,
                               "\nReport details:", data_payload,
                               "\nHTTP Code:", response.status_code,
                               "\nReview API Headers:", response.headers,
                               "\nResponse Body:", response.content)
-                        print("Review for", "Customer:", customerId, "on Success Tracks:", successTrackId,
-                              "Report Failed to Download\n")
-                location = response.headers["location"]
-                json_filename = (location.split('/')[-1] + '.json')
-                tries = 1
-                print("")
-                while True:
-                    time.sleep(wait_time * tries)
-                    print("Scanning for data...")
-                    filename = (temp_dir + location.split('/')[-1] + '.zip')
-                    headers = {'Authorization': f'Bearer {token}'}
-                    response = requests.request("GET", location, headers=headers, data=payload)
-                    if debug_level == 2:
-                        print("\nLocation URL Returned:", location,
-                              "\nHTTP Code:", response.status_code,
-                              "\nReview API Headers:", response.headers,
-                              "\nResponse Body:", response.content, "\nWait Time:", tries)
-                    try:
-                        with open(filename, 'wb') as file:
-                            file.write(response.content)
-                        with open(filename, "rb") as file:
-                            if file.read() and response.status_code == 200:
-                                with zipfile.ZipFile(filename, 'r') as zip_file:
-                                    zip_file.extractall(temp_dir)
-                                    if tries >= 2:
-                                        if debug_level == 2:
-                                            print("Success on retry!\nContinuing\n", end="")
-                            else:
-                                print("\nDownload Failed")
-                                raise Exception("File Corrupted")
-                        os.remove(filename)
-                    except Exception as FileCorruptError:
+                        while response.status_code >= 400:
+                            print(f"Pausing for {wait_time} seconds before re-request...")
+                            time.sleep(wait_time)
+                            print("Resuming...")
+                            print("Making API Call again with the following...")
+                            print("URL: ", url)
+                            print("Data Payload: ", data_payload)
+                            response = requests.request(
+                                "POST",
+                                url,
+                                headers=headers,
+                                data=data_payload,
+                                verify=True
+                            )
+                            print("Report request URL:", url,
+                                  "\nReport details:", data_payload,
+                                  "\nHTTP Code:", response.status_code,
+                                  "\nReview API Headers:", response.headers,
+                                  "\nResponse Body:", response.content)
+                            print("Review for", "Customer:", customerId, "on Success Track", successTrackId,
+                                  "Report Failed to Download\n")
+                    location = response.headers["location"]
+                    json_filename = (location.split('/')[-1] + '.json')
+                    tries = 1
+                    while True:
+                        time.sleep(wait_time * tries)
+                        print("Scanning for data...")
+                        filename = (temp_dir + location.split('/')[-1] + '.zip')
+                        headers = {'Authorization': f'Bearer {token}'}
+                        response = requests.request("GET", location, headers=headers, data=payload)
                         if debug_level == 2:
-                            print("\nDeleting file..." + str(filename) + " " +
-                                  str(FileCorruptError) + "\nRetrying....", end="")
-                            print(f"Pausing for {wait_time} seconds before retrying...", end="")
-                        time.sleep(wait_time * tries)  # increase the wait with the number of retries
-                        if tries >= 20:
+                            print("\nLocation URL Returned:", location,
+                                  "\nHTTP Code:", response.status_code,
+                                  "\nReview API Headers:", response.headers,
+                                  "\nResponse Body:", response.content, "\nWait Time:", tries)
+                        try:
+                            with open(filename, 'wb') as file:
+                                file.write(response.content)
+                            with open(filename, "rb") as file:
+                                if file.read() and response.status_code == 200:
+                                    with zipfile.ZipFile(filename, 'r') as zip_file:
+                                        zip_file.extractall(temp_dir)
+                                        if tries >= 2:
+                                            if debug_level == 2:
+                                                print("Success on retry!\nContinuing\n", end="")
+                                else:
+                                    print("\nDownload Failed")
+                                    raise Exception("File Corrupted")
+                            # os.remove(filename)
+                        except Exception as FileCorruptError:
+                            if debug_level == 2:
+                                print("\nDeleting file..." + str(filename) + " " +
+                                      str(FileCorruptError) + "\nRetrying....", end="")
+                                print(f"Pausing for {wait_time} seconds before retrying...", end="")
+                            time.sleep(wait_time * tries)  # increase the wait with the number of retries
+                            if tries >= 3:
+                                break
+                        else:
                             break
+                        finally:
+                            tries += 1
+                    if useProductionURL == "True":
+                        input_json_file = str(temp_dir + customerId + "_Assets_" + json_filename)
                     else:
-                        break
-                    finally:
-                        tries += 1
-                if useProductionURL == "True":
-                    input_json_file = str(temp_dir + customerId + "_Assets_" + json_filename)
-                else:
-                    input_json_file = str(temp_dir + json_filename)
-                if debug_level == 1 or debug_level == 2:
-                    print("\nReading file:", input_json_file)
-                with open(input_json_file, 'r', encoding='utf-8') as inputTarget:
-                    data = json.load(inputTarget)
-                    customerId = data['metadata']['customerId']
-                    totalCount = data['metadata']['totalCount']
-                    items = data['items']
-                if outputFormat == 1 or outputFormat == 3:
-                    if totalCount > 0:
-                        print(f"\nFound Asset Data on Success Track {successTrackId} for customer {customerName}")
-                        if len(items) > 0:
-                            for item in items:
-                                assetId = str(item['assetId']).replace(",", "_")
-                                assetName = str(item['assetName'])
-                                productFamily = str(item['productFamily']).replace(",", " ")
-                                productType = str(item['productType']).replace(",", " ")
-                                serialNumber = str(item['serialNumber'])
-                                productId = str(item['productId'])
-                                ipAddress = str(item['ipAddress'])
-                                productDescription = str(item['productDescription']).replace(",", " ")
-                                softwareType = str(item['softwareType']).replace(",", " ")
-                                softwareRelease = str(item['softwareRelease'])
-                                try:
-                                    role = str((item['role']))
-                                except KeyError:
-                                    role = "N/A"
-                                    pass
-                                assetLocation = str(item['location']).replace(",", " ")
-                                coverageStatus = str(item['coverageStatus'])
-                                try:
-                                    lastScan = str(item['lastScan'])
-                                    if lastScan == "None":
-                                        lastScan = ""
-                                except KeyError:
-                                    lastScan = ""
-                                    pass
-                                successTrack = item['successTrack']
-                                endOfLifeAnnounced = str(item['endOfLifeAnnounced'])
-                                if endOfLifeAnnounced == "None":
-                                    endOfLifeAnnounced = ""
-                                endOfSale = str(item['endOfSale'])
-                                if endOfSale == "None":
-                                    endOfSale = ""
-                                lastShip = str(item['lastShip'])
-                                if lastShip == "None":
-                                    lastShip = ""
-                                endOfRoutineFailureAnalysis = str(item['endOfRoutineFailureAnalysis'])
-                                if endOfRoutineFailureAnalysis == "None":
-                                    endOfRoutineFailureAnalysis = ""
-                                endOfNewServiceAttach = str(item['endOfNewServiceAttach'])
-                                if endOfNewServiceAttach == "None":
-                                    endOfNewServiceAttach = ""
-                                endOfServiceContractRenewal = str(item['endOfServiceContractRenewal'])
-                                if endOfServiceContractRenewal == "None":
-                                    endOfServiceContractRenewal = ""
-                                ldosDate = str(item['ldosDate'])
-                                if ldosDate == "None":
-                                    ldosDate = ""
-                                connectionStatus = str(item['connectionStatus'])
-                                try:
-                                    managedBy = str(item['managedBy'])
-                                except KeyError:
-                                    managedBy = "N/A"
-                                    pass
-                                contractNumber = str(item['contractNumber'])
-                                coverageEndDate = str(item['coverageEndDate'])
-                                if coverageEndDate == "None":
-                                    coverageEndDate = ""
-                                coverageStartDate = str(item['coverageStartDate'])
-                                if coverageStartDate == "None":
-                                    coverageStartDate = ""
-                                supportType = str(item['supportType'])
-                                advisories = str(item['advisories'])
-                                assetType = str(item['assetType'])
-                                try:
-                                    criticalSecurityAdvisories = str(item['criticalSecurityAdvisories'])
-                                except KeyError:
-                                    criticalSecurityAdvisories = ""
-                                    pass
-                                try:
-                                    addressLine1 = str(item['addressLine1']).replace(",", " ")
-                                except KeyError:
-                                    addressLine1 = ""
-                                    pass
-                                try:
-                                    addressLine2 = str(item['addressLine2']).replace(",", " ")
-                                except KeyError:
-                                    addressLine2 = ""
-                                    pass
-                                try:
-                                    addressLine3 = str(item['addressLine3']).replace(",", " ")
-                                except KeyError:
-                                    addressLine3 = ""
-                                    pass
-                                try:
-                                    licenseStatus = str(item['licenseStatus'])
-                                except KeyError:
-                                    licenseStatus = ""
-                                    pass
-                                try:
-                                    licenseLevel = str(item['licenseLevel'])
-                                except KeyError:
-                                    licenseLevel = ""
-                                    pass
-                                try:
-                                    profileName = str(item['profileName']).replace(",", " ")
-                                except KeyError:
-                                    profileName = ""
-                                    pass
-                                try:
-                                    hclStatus = str(item['hclStatus'])
-                                except KeyError:
-                                    hclStatus = ""
-                                    pass
-                                try:
-                                    ucsDomain = str(item['ucsDomain'])
-                                except KeyError:
-                                    ucsDomain = ""
-                                    pass
-                                try:
-                                    hxCluster = str(item['hxCluster'])
-                                except KeyError:
-                                    hxCluster = ""
-                                    pass
-                                try:
-                                    subscriptionId = str(item['subscriptionId'])
-                                except KeyError:
-                                    subscriptionId = ""
-                                    pass
-                                try:
-                                    subscriptionStartDate = str(item['subscriptionStartDate'])
-                                    if subscriptionStartDate == "None":
-                                        subscriptionStartDate = ""
-                                except KeyError:
-                                    subscriptionStartDate = ""
-                                    pass
-                                try:
-                                    subscriptionEndDate = str(item['subscriptionEndDate'])
-                                    if subscriptionEndDate == "None":
-                                        subscriptionEndDate = ""
-                                except KeyError:
-                                    subscriptionEndDate = ""
-                                    pass
-                                for track in successTrack:
-                                    successTrackId = track['id']
-                                    useCases = track['useCases']
-                                    for useCase in useCases:
-                                        if outputFormat == 1 or outputFormat == 3:
-                                            with open(assets, 'a', encoding="utf-8", newline='') as report_target:
-                                                writer = csv.writer(report_target,
-                                                                    delimiter=' ',
-                                                                    quotechar=' ',
-                                                                    quoting=csv.QUOTE_MINIMAL)
-                                                CSV_Data = (customerId + ',' +
-                                                            successTrackId + ',' +
-                                                            useCase + ',' +
-                                                            assetId + ',' +
-                                                            assetName + ',' +
-                                                            productFamily + ',' +
-                                                            productType + ',' +
-                                                            serialNumber + ',' +
-                                                            productId + ',' +
-                                                            ipAddress + ',' +
-                                                            productDescription + ',' +
-                                                            softwareType + ',' +
-                                                            softwareRelease + ',' +
-                                                            role + ',' +
-                                                            assetLocation + ',' +
-                                                            coverageStatus + ',' +
-                                                            lastScan + ',' +
-                                                            endOfLifeAnnounced + ',' +
-                                                            endOfSale + ',' +
-                                                            lastShip + ',' +
-                                                            endOfRoutineFailureAnalysis + ',' +
-                                                            endOfNewServiceAttach + ',' +
-                                                            endOfServiceContractRenewal + ',' +
-                                                            ldosDate + ',' +
-                                                            connectionStatus + ',' +
-                                                            managedBy + ',' +
-                                                            contractNumber + ',' +
-                                                            coverageEndDate + ',' +
-                                                            coverageStartDate + ',' +
-                                                            supportType + ',' +
-                                                            advisories + ',' +
-                                                            assetType + ',' +
-                                                            criticalSecurityAdvisories + ',' +
-                                                            addressLine1 + ',' +
-                                                            addressLine2 + ',' +
-                                                            addressLine3 + ',' +
-                                                            licenseStatus + ',' +
-                                                            licenseLevel + ',' +
-                                                            profileName + ',' +
-                                                            hclStatus + ',' +
-                                                            ucsDomain + ',' +
-                                                            hxCluster + ',' +
-                                                            subscriptionId + ',' +
-                                                            subscriptionStartDate + ',' +
-                                                            subscriptionEndDate)
-                                                writer.writerow(CSV_Data.split())
-                        if debug_level == 1 or debug_level == 2:
-                            print("Success")
-                else:
-                    print("\nNo Asset Data Found For Customer:", customerName,
-                          "\nSkipping this record and continuing....\n", end="")
-                if outputFormat == 1 or outputFormat == 2:
-                    if totalCount > 0:
-                        print(f"Saving {json_output_dir}{customerId}_Assets_{json_filename}")
-                        shutil.copy(input_json_file, json_output_dir)
-                    os.remove(input_json_file)
+                        input_json_file = str(temp_dir + json_filename)
+                    if debug_level == 1 or debug_level == 2:
+                        print(f"\nReading file:{input_json_file}")
+                    if not os.path.isfile(input_json_file):
+                        print("File Not Found, Skipping.....")
+                    if os.path.isfile(input_json_file):
+                        with open(input_json_file, 'r', encoding='utf-8') as inputTarget:
+                            data = json.load(inputTarget)
+                            customerId = data['metadata']['customerId']
+                            totalCount = data['metadata']['totalCount']
+                            items = data['items']
+                        if outputFormat == 1 or outputFormat == 3:
+                            if totalCount > 0:
+                                print(f"Found Asset Data on Success Track {successTrackId}")
+                                if len(items) > 0:
+                                    for item in items:
+                                        assetId = str(item['assetId']).replace(",", "_")
+                                        assetName = str(item['assetName'])
+                                        productFamily = str(item['productFamily']).replace(",", " ")
+                                        productType = str(item['productType']).replace(",", " ")
+                                        serialNumber = str(item['serialNumber'])
+                                        productId = str(item['productId'])
+                                        ipAddress = str(item['ipAddress'])
+                                        productDescription = str(item['productDescription']).replace(",", " ")
+                                        softwareType = str(item['softwareType']).replace(",", " ")
+                                        softwareRelease = str(item['softwareRelease'])
+                                        try:
+                                            role = str((item['role']))
+                                        except KeyError:
+                                            role = "N/A"
+                                            pass
+                                        assetLocation = str(item['location']).replace(",", " ")
+                                        coverageStatus = str(item['coverageStatus'])
+                                        try:
+                                            lastScan = str(item['lastScan'])
+                                            if lastScan == "None":
+                                                lastScan = ""
+                                        except KeyError:
+                                            lastScan = ""
+                                            pass
+                                        successTrack = item['successTrack']
+                                        endOfLifeAnnounced = str(item['endOfLifeAnnounced'])
+                                        if endOfLifeAnnounced == "None":
+                                            endOfLifeAnnounced = ""
+                                        endOfSale = str(item['endOfSale'])
+                                        if endOfSale == "None":
+                                            endOfSale = ""
+                                        lastShip = str(item['lastShip'])
+                                        if lastShip == "None":
+                                            lastShip = ""
+                                        endOfRoutineFailureAnalysis = str(item['endOfRoutineFailureAnalysis'])
+                                        if endOfRoutineFailureAnalysis == "None":
+                                            endOfRoutineFailureAnalysis = ""
+                                        endOfNewServiceAttach = str(item['endOfNewServiceAttach'])
+                                        if endOfNewServiceAttach == "None":
+                                            endOfNewServiceAttach = ""
+                                        endOfServiceContractRenewal = str(item['endOfServiceContractRenewal'])
+                                        if endOfServiceContractRenewal == "None":
+                                            endOfServiceContractRenewal = ""
+                                        ldosDate = str(item['ldosDate'])
+                                        if ldosDate == "None":
+                                            ldosDate = ""
+                                        connectionStatus = str(item['connectionStatus'])
+                                        try:
+                                            managedBy = str(item['managedBy'])
+                                        except KeyError:
+                                            managedBy = "N/A"
+                                            pass
+                                        contractNumber = str(item['contractNumber'])
+                                        coverageEndDate = str(item['coverageEndDate'])
+                                        if coverageEndDate == "None":
+                                            coverageEndDate = ""
+                                        coverageStartDate = str(item['coverageStartDate'])
+                                        if coverageStartDate == "None":
+                                            coverageStartDate = ""
+                                        supportType = str(item['supportType'])
+                                        advisories = str(item['advisories'])
+                                        assetType = str(item['assetType'])
+                                        try:
+                                            criticalSecurityAdvisories = str(item['criticalSecurityAdvisories'])
+                                        except KeyError:
+                                            criticalSecurityAdvisories = ""
+                                            pass
+                                        try:
+                                            addressLine1 = str(item['addressLine1']).replace(",", " ")
+                                        except KeyError:
+                                            addressLine1 = ""
+                                            pass
+                                        try:
+                                            addressLine2 = str(item['addressLine2']).replace(",", " ")
+                                        except KeyError:
+                                            addressLine2 = ""
+                                            pass
+                                        try:
+                                            addressLine3 = str(item['addressLine3']).replace(",", " ")
+                                        except KeyError:
+                                            addressLine3 = ""
+                                            pass
+                                        try:
+                                            licenseStatus = str(item['licenseStatus'])
+                                        except KeyError:
+                                            licenseStatus = ""
+                                            pass
+                                        try:
+                                            licenseLevel = str(item['licenseLevel'])
+                                        except KeyError:
+                                            licenseLevel = ""
+                                            pass
+                                        try:
+                                            profileName = str(item['profileName']).replace(",", " ")
+                                        except KeyError:
+                                            profileName = ""
+                                            pass
+                                        try:
+                                            hclStatus = str(item['hclStatus'])
+                                        except KeyError:
+                                            hclStatus = ""
+                                            pass
+                                        try:
+                                            ucsDomain = str(item['ucsDomain'])
+                                        except KeyError:
+                                            ucsDomain = ""
+                                            pass
+                                        try:
+                                            hxCluster = str(item['hxCluster'])
+                                        except KeyError:
+                                            hxCluster = ""
+                                            pass
+                                        try:
+                                            subscriptionId = str(item['subscriptionId'])
+                                        except KeyError:
+                                            subscriptionId = ""
+                                            pass
+                                        try:
+                                            subscriptionStartDate = str(item['subscriptionStartDate'])
+                                            if subscriptionStartDate == "None":
+                                                subscriptionStartDate = ""
+                                        except KeyError:
+                                            subscriptionStartDate = ""
+                                            pass
+                                        try:
+                                            subscriptionEndDate = str(item['subscriptionEndDate'])
+                                            if subscriptionEndDate == "None":
+                                                subscriptionEndDate = ""
+                                        except KeyError:
+                                            subscriptionEndDate = ""
+                                            pass
+                                        for track in successTrack:
+                                            successTrackId = track['id']
+                                            useCases = track['useCases']
+                                            for useCase in useCases:
+                                                if outputFormat == 1 or outputFormat == 3:
+                                                    with open(assets, 'a', encoding="utf-8", newline='') \
+                                                            as report_target:
+                                                        writer = csv.writer(report_target,
+                                                                            delimiter=' ',
+                                                                            quotechar=' ',
+                                                                            quoting=csv.QUOTE_MINIMAL)
+                                                        CSV_Data = (customerId + ',' +
+                                                                    successTrackId + ',' +
+                                                                    useCase + ',' +
+                                                                    assetId + ',' +
+                                                                    assetName + ',' +
+                                                                    productFamily + ',' +
+                                                                    productType + ',' +
+                                                                    serialNumber + ',' +
+                                                                    productId + ',' +
+                                                                    ipAddress + ',' +
+                                                                    productDescription + ',' +
+                                                                    softwareType + ',' +
+                                                                    softwareRelease + ',' +
+                                                                    role + ',' +
+                                                                    assetLocation + ',' +
+                                                                    coverageStatus + ',' +
+                                                                    lastScan + ',' +
+                                                                    endOfLifeAnnounced + ',' +
+                                                                    endOfSale + ',' +
+                                                                    lastShip + ',' +
+                                                                    endOfRoutineFailureAnalysis + ',' +
+                                                                    endOfNewServiceAttach + ',' +
+                                                                    endOfServiceContractRenewal + ',' +
+                                                                    ldosDate + ',' +
+                                                                    connectionStatus + ',' +
+                                                                    managedBy + ',' +
+                                                                    contractNumber + ',' +
+                                                                    coverageEndDate + ',' +
+                                                                    coverageStartDate + ',' +
+                                                                    supportType + ',' +
+                                                                    advisories + ',' +
+                                                                    assetType + ',' +
+                                                                    criticalSecurityAdvisories + ',' +
+                                                                    addressLine1 + ',' +
+                                                                    addressLine2 + ',' +
+                                                                    addressLine3 + ',' +
+                                                                    licenseStatus + ',' +
+                                                                    licenseLevel + ',' +
+                                                                    profileName + ',' +
+                                                                    hclStatus + ',' +
+                                                                    ucsDomain + ',' +
+                                                                    hxCluster + ',' +
+                                                                    subscriptionId + ',' +
+                                                                    subscriptionStartDate + ',' +
+                                                                    subscriptionEndDate)
+                                                        writer.writerow(CSV_Data.split())
+                                if debug_level == 1 or debug_level == 2:
+                                    print("Success")
+                            else:
+                                print(f"No Asset Data Found for Success Track {successTrackId}")
+                        else:
+                            print(f"No Asset Data Found for Success Track {successTrackId}"
+                                  f"\nSkipping this record and continuing....")
+                        if outputFormat == 1 or outputFormat == 2:
+                            if totalCount > 0:
+                                print(f"Saving {json_output_dir}{customerId}_Assets_{json_filename}")
+                                shutil.copy(input_json_file, json_output_dir)
+                            os.remove(input_json_file)
             else:
-                print("\nNo Asset Data Found For Customer:", customerName,
-                      "\nSkipping this record and continuing....")
+                print(f"No Asset Data Found for Success Track {successTrackId}"
+                      f"\nSkipping this record and continuing....")
     print("\nSearch Completed!")
     if debug_level == 1 or debug_level == 2:
         now = datetime.now()
@@ -1581,11 +1614,10 @@ def pxc_assets_reports():
 # CSV Naming Convention: Hardware.csv
 # JSON Naming Convention: {Customer ID}_Hardware_{UniqueReportID}.json
 def pxc_hardware_reports():
-    token_time_check()
     print("******************************************************************")
     print("****************** Running Hardware Report ***********************")
     print("******************************************************************")
-    print("Searching ......\n", end="")
+    print("Searching ......")
     if debug_level == 1 or debug_level == 2:
         now = datetime.now()
         print('Start DateTime:', now)
@@ -1619,11 +1651,9 @@ def pxc_hardware_reports():
             customerId = row['customerId']
             successTrackId = row['successTrackId']
             customerName = row['customerName']
-            if debug_level == 1 or debug_level == 2:
-                print("====================\n\n")
-                print("Hardware data for Customer:", customerName,
-                      "on Success Tracks:", successTrackId)
+            print(f"\nScanning hardware data for {customerName}")
             if not successTrackId == "N/A":
+                token_time_check()
                 url = (pxc_url_customers + "/" + customerId + "/reports")
                 data_payload = json.dumps({"reportName": "hardware", "successTrackId": successTrackId})
                 headers = {'Authorization': f'Bearer {token}'}
@@ -1640,185 +1670,191 @@ def pxc_hardware_reports():
                           "\nHTTP Code:", response.status_code,
                           "\nReview API Headers:", response.headers,
                           "\nResponse Body:", response.content)
-                try:
-                    if bool(response.headers["location"]) is True:
-                        pass
-                    else:
-                        raise KeyError
-                except KeyError:
-                    print("\n!!!!!!!!\nException Thrown for", "Customer:", customerName,
-                          "on Success Tracks:", successTrackId,
-                          "Report Failed to Download\n")
-                    print("Report request URL:", url,
-                          "\nReport details:", data_payload,
-                          "\nHTTP Code:", response.status_code,
-                          "\nReview API Headers:", response.headers,
-                          "\nResponse Body:", response.content)
-                    while response.status_code >= 400:
-                        print(f"Pausing for {wait_time} seconds before re-request...")
-                        time.sleep(wait_time)
-                        print("Resuming...")
-                        print("Making API Call again with the following...")
-                        print("URL: ", url)
-                        print("Data Payload: ", data_payload)
-                        response = requests.request(
-                            "POST",
-                            url,
-                            headers=headers,
-                            data=data_payload,
-                            verify=True
-                        )
+                if response.text.__contains__("Customer admin has not provided access."):
+                    print(f"Customer admin has not provided access on Success Track {successTrackId}")
+                if not (response.text.__contains__("Customer admin has not provided access.")):
+                    try:
+                        if bool(response.headers["location"]) is True:
+                            pass
+                        else:
+                            raise KeyError
+                    except KeyError:
+                        print("\n!!!!!!!!\nException Thrown for", "Customer:", customerName,
+                              "on Success Track ", successTrackId,
+                              "Report Failed to Download\n")
                         print("Report request URL:", url,
                               "\nReport details:", data_payload,
                               "\nHTTP Code:", response.status_code,
                               "\nReview API Headers:", response.headers,
                               "\nResponse Body:", response.content)
-                        print(f"Review for Customer: {customerName} on Success Tracks:{successTrackId} "
-                              f"Report Failed to Download\n")
-                location = response.headers["location"]
-                json_filename = (location.split('/')[-1] + '.json')
-                tries = 1
-                print("")
-                while True:
-                    time.sleep(tries)
-                    print("Scanning for data...")
-                    filename = (temp_dir + location.split('/')[-1] + '.zip')
-                    headers = {'Authorization': f'Bearer {token}'}
-                    response = requests.request("GET", location, headers=headers, data=payload)
-                    if debug_level == 2:
-                        print("\nLocation URL Returned:", location,
-                              "\nHTTP Code:", response.status_code,
-                              "\nReview API Headers:", response.headers,
-                              "\nResponse Body:", response.content, "\nWait Time:", tries)
-                    try:
-                        with open(filename, 'wb') as file:
-                            file.write(response.content)
-                        with open(filename, "rb") as file:
-                            if file.read() and response.status_code == 200:
-                                with zipfile.ZipFile(filename, 'r') as zip_file:
-                                    zip_file.extractall(temp_dir)
-                                    if tries >= 2:
-                                        if debug_level == 2:
-                                            print("Success on retry!\nContinuing\n", end="")
-                            else:
-                                print("\nDownload Failed")
-                                raise Exception("File Corrupted")
-                        os.remove(filename)
-                    except Exception as FileCorruptError:
+                        while response.status_code >= 400:
+                            print(f"Pausing for {wait_time} seconds before re-request...")
+                            time.sleep(wait_time)
+                            print("Resuming...")
+                            print("Making API Call again with the following...")
+                            print("URL: ", url)
+                            print("Data Payload: ", data_payload)
+                            response = requests.request(
+                                "POST",
+                                url,
+                                headers=headers,
+                                data=data_payload,
+                                verify=True
+                            )
+                            print("Report request URL:", url,
+                                  "\nReport details:", data_payload,
+                                  "\nHTTP Code:", response.status_code,
+                                  "\nReview API Headers:", response.headers,
+                                  "\nResponse Body:", response.content)
+                            print(f"Review for  {customerName} on Success Track {successTrackId} "
+                                  f"Report Failed to Download\n")
+                    location = response.headers["location"]
+                    json_filename = (location.split('/')[-1] + '.json')
+                    tries = 1
+                    while True:
+                        time.sleep(tries)
+                        print("Scanning for data...")
+                        filename = (temp_dir + location.split('/')[-1] + '.zip')
+                        headers = {'Authorization': f'Bearer {token}'}
+                        response = requests.request("GET", location, headers=headers, data=payload)
                         if debug_level == 2:
-                            print("\nDeleting file..." + str(filename) + " " +
-                                  str(FileCorruptError) + "\nRetrying....", end="")
-                            print(f"Pausing for {wait_time} seconds before retrying...", end="")
-                        time.sleep(wait_time * tries)  # increase the wait with the number of retries
-                        if tries >= 20:
+                            print("\nLocation URL Returned:", location,
+                                  "\nHTTP Code:", response.status_code,
+                                  "\nReview API Headers:", response.headers,
+                                  "\nResponse Body:", response.content, "\nWait Time:", tries)
+                        try:
+                            with open(filename, 'wb') as file:
+                                file.write(response.content)
+                            with open(filename, "rb") as file:
+                                if file.read() and response.status_code == 200:
+                                    with zipfile.ZipFile(filename, 'r') as zip_file:
+                                        zip_file.extractall(temp_dir)
+                                        if tries >= 2:
+                                            if debug_level == 2:
+                                                print("Success on retry!\nContinuing\n", end="")
+                                else:
+                                    print("\nDownload Failed")
+                                    raise Exception("File Corrupted")
+                            # os.remove(filename)
+                        except Exception as FileCorruptError:
+                            if debug_level == 2:
+                                print("\nDeleting file..." + str(filename) + " " +
+                                      str(FileCorruptError) + "\nRetrying....", end="")
+                                print(f"Pausing for {wait_time} seconds before retrying...", end="")
+                            time.sleep(wait_time * tries)  # increase the wait with the number of retries
+                            if tries >= 3:
+                                break
+                        else:
                             break
+                        finally:
+                            tries += 1
+                    if useProductionURL == "True":
+                        input_json_file = str(temp_dir + customerId + "_Hardware_" + json_filename)
                     else:
-                        break
-                    finally:
-                        tries += 1
-                if useProductionURL == "True":
-                    input_json_file = str(temp_dir + customerId + "_Hardware_" + json_filename)
-                else:
-                    input_json_file = str(temp_dir + json_filename)
-                if debug_level == 1 or debug_level == 2:
-                    print("\nReading file:", input_json_file)
-                with open(input_json_file, 'r', encoding='utf-8') as inputTarget:
-                    data = json.load(inputTarget)
-                    customerId = data['metadata']['customerId']
-                    totalCount = data['metadata']['totalCount']
-                    items = data['items']
-                if outputFormat == 1 or outputFormat == 3:
-                    if totalCount > 0:
-                        print(f"\nFound Hardware Data on Success Track {successTrackId} for customer {customerName}")
-                        for item in items:
-                            assetId = str(item['assetId']).replace(",", "_")
-                            hwInstanceId = str(item['hwInstanceId']).replace(",", " ")
-                            assetName = str(item['assetName'])
-                            productFamily = str(item['productFamily']).replace(",", " ")
-                            productId = str(item['productId'])
-                            serialNumber = str(item['serialNumber'])
-                            successTrack = item['successTrack']
-                            endOfLifeAnnounced = str(item['endOfLifeAnnounced'])
-                            if endOfLifeAnnounced == "None":
-                                endOfLifeAnnounced = ""
-                            endOfSale = str(item['endOfSale'])
-                            if endOfSale == "None":
-                                endOfSale = ""
-                            lastShip = str(item['lastShip'])
-                            if lastShip == "None":
-                                lastShip = ""
-                            endOfRoutineFailureAnalysis = str(item['endOfRoutineFailureAnalysis'])
-                            if endOfRoutineFailureAnalysis == "None":
-                                endOfRoutineFailureAnalysis = ""
-                            endOfNewServiceAttach = str(item['endOfNewServiceAttach'])
-                            if endOfNewServiceAttach == "None":
-                                endOfNewServiceAttach = ""
-                            endOfServiceContractRenewal = str(item['endOfServiceContractRenewal'])
-                            if endOfServiceContractRenewal == "None":
-                                endOfServiceContractRenewal = ""
-                            ldosDate = str(item['ldosDate'])
-                            if ldosDate == "None":
-                                ldosDate = ""
-                            coverageEndDate = str(item['coverageEndDate'])
-                            if coverageEndDate == "None":
-                                coverageEndDate = ""
-                            coverageStartDate = str(item['coverageStartDate'])
-                            if coverageStartDate == "None":
-                                coverageStartDate = ""
-                            contractNumber = str(item['contractNumber'])
-                            if contractNumber == "None":
-                                contractNumber = ""
-                            coverageStatus = str(item['coverageStatus'])
-                            for track in successTrack:
-                                successTracksId = track['id']
-                                useCases = track['useCases']
-                                for useCase in useCases:
-                                    if outputFormat == 1 or outputFormat == 3:
-                                        with open(hardware, 'a', encoding="utf-8", newline='') as report_target:
-                                            writer = csv.writer(report_target,
-                                                                delimiter=' ',
-                                                                quotechar=' ',
-                                                                quoting=csv.QUOTE_MINIMAL)
-                                            CSV_Data = (customerId + ',' +
-                                                        successTracksId + ',' +
-                                                        useCase + ',' +
-                                                        assetId + ',' +
-                                                        hwInstanceId + ',' +
-                                                        assetName + ',' +
-                                                        productFamily + ',' +
-                                                        productId + ',' +
-                                                        serialNumber + ',' +
-                                                        endOfLifeAnnounced + ',' +
-                                                        endOfSale + ',' +
-                                                        lastShip + ',' +
-                                                        endOfRoutineFailureAnalysis + ',' +
-                                                        endOfNewServiceAttach + ',' +
-                                                        endOfServiceContractRenewal + ',' +
-                                                        ldosDate + ',' +
-                                                        coverageEndDate + ',' +
-                                                        coverageStartDate + ',' +
-                                                        contractNumber + ',' +
-                                                        coverageStatus)
-                                            writer.writerow(CSV_Data.split())
-                        if debug_level == 1 or debug_level == 2:
-                            print("Success")
-                else:
-                    print("\nNo Hardware Data Found .... Skipping for Customer:", customerName,
-                          "on Success Tracks:", successTrackId,
-                          "\nSkipping this record and continuing....\n", end="")
-                if outputFormat == 1 or outputFormat == 2:
-                    if totalCount > 0:
-                        print(f"Saving {json_output_dir}{customerId}_Hardware_{json_filename}")
-                        shutil.copy(input_json_file, json_output_dir)
-                    os.remove(input_json_file)
+                        input_json_file = str(temp_dir + json_filename)
+                    if debug_level == 1 or debug_level == 2:
+                        print(f"\nReading file:{input_json_file}")
+                    if not os.path.isfile(input_json_file):
+                        print("File Not Found, Skipping.....")
+                    if os.path.isfile(input_json_file):
+                        with open(input_json_file, 'r', encoding='utf-8') as inputTarget:
+                            data = json.load(inputTarget)
+                            customerId = data['metadata']['customerId']
+                            totalCount = data['metadata']['totalCount']
+                            items = data['items']
+                        if outputFormat == 1 or outputFormat == 3:
+                            if totalCount > 0:
+                                print(f"Found Hardware Data on Success Track {successTrackId}")
+                                for item in items:
+                                    assetId = str(item['assetId']).replace(",", "_")
+                                    hwInstanceId = str(item['hwInstanceId']).replace(",", " ")
+                                    assetName = str(item['assetName'])
+                                    productFamily = str(item['productFamily']).replace(",", " ")
+                                    productId = str(item['productId'])
+                                    serialNumber = str(item['serialNumber'])
+                                    successTrack = item['successTrack']
+                                    endOfLifeAnnounced = str(item['endOfLifeAnnounced'])
+                                    if endOfLifeAnnounced == "None":
+                                        endOfLifeAnnounced = ""
+                                    endOfSale = str(item['endOfSale'])
+                                    if endOfSale == "None":
+                                        endOfSale = ""
+                                    lastShip = str(item['lastShip'])
+                                    if lastShip == "None":
+                                        lastShip = ""
+                                    endOfRoutineFailureAnalysis = str(item['endOfRoutineFailureAnalysis'])
+                                    if endOfRoutineFailureAnalysis == "None":
+                                        endOfRoutineFailureAnalysis = ""
+                                    endOfNewServiceAttach = str(item['endOfNewServiceAttach'])
+                                    if endOfNewServiceAttach == "None":
+                                        endOfNewServiceAttach = ""
+                                    endOfServiceContractRenewal = str(item['endOfServiceContractRenewal'])
+                                    if endOfServiceContractRenewal == "None":
+                                        endOfServiceContractRenewal = ""
+                                    ldosDate = str(item['ldosDate'])
+                                    if ldosDate == "None":
+                                        ldosDate = ""
+                                    coverageEndDate = str(item['coverageEndDate'])
+                                    if coverageEndDate == "None":
+                                        coverageEndDate = ""
+                                    coverageStartDate = str(item['coverageStartDate'])
+                                    if coverageStartDate == "None":
+                                        coverageStartDate = ""
+                                    contractNumber = str(item['contractNumber'])
+                                    if contractNumber == "None":
+                                        contractNumber = ""
+                                    coverageStatus = str(item['coverageStatus'])
+                                    for track in successTrack:
+                                        successTracksId = track['id']
+                                        useCases = track['useCases']
+                                        for useCase in useCases:
+                                            if outputFormat == 1 or outputFormat == 3:
+                                                with open(hardware, 'a', encoding="utf-8", newline='') as report_target:
+                                                    writer = csv.writer(report_target,
+                                                                        delimiter=' ',
+                                                                        quotechar=' ',
+                                                                        quoting=csv.QUOTE_MINIMAL)
+                                                    CSV_Data = (customerId + ',' +
+                                                                successTracksId + ',' +
+                                                                useCase + ',' +
+                                                                assetId + ',' +
+                                                                hwInstanceId + ',' +
+                                                                assetName + ',' +
+                                                                productFamily + ',' +
+                                                                productId + ',' +
+                                                                serialNumber + ',' +
+                                                                endOfLifeAnnounced + ',' +
+                                                                endOfSale + ',' +
+                                                                lastShip + ',' +
+                                                                endOfRoutineFailureAnalysis + ',' +
+                                                                endOfNewServiceAttach + ',' +
+                                                                endOfServiceContractRenewal + ',' +
+                                                                ldosDate + ',' +
+                                                                coverageEndDate + ',' +
+                                                                coverageStartDate + ',' +
+                                                                contractNumber + ',' +
+                                                                coverageStatus)
+                                                    writer.writerow(CSV_Data.split())
+                                if debug_level == 1 or debug_level == 2:
+                                    print("Success")
+                            else:
+                                print(f"No Hardware Data Found for Success Track {successTrackId}")
+                        else:
+                            print(f"No Hardware Data Found for Success Track {successTrackId}"
+                                  f"\nSkipping this record and continuing....")
+                        if outputFormat == 1 or outputFormat == 2:
+                            if totalCount > 0:
+                                print(f"Saving {json_output_dir}{customerId}_Hardware_{json_filename}")
+                                shutil.copy(input_json_file, json_output_dir)
+                            os.remove(input_json_file)
             else:
-                print("\nNo Hardware Data Found For Customer:", customerName,
-                      "\nSkipping this record and continuing....")
+                print(f"No Hardware Data Found for Success Track {successTrackId}"
+                      f"\nSkipping this record and continuing....")
     print("\nSearch Completed!")
     if debug_level == 1 or debug_level == 2:
         now = datetime.now()
         print('Stop DateTime:', now)
-    print("====================\n\n")
+    print("====================\n")
 
 
 # Function to request, download and process Software report data from PX Cloud
@@ -1826,11 +1862,10 @@ def pxc_hardware_reports():
 # CSV Naming Convention: Software.csv
 # JSON Naming Convention: {Customer ID}_Software_{UniqueReportID}.json
 def pxc_software_reports():
-    token_time_check()
     print("******************************************************************")
     print("******************* Running Software Report **********************")
     print("******************************************************************")
-    print("Searching ......\n", end="")
+    print("Searching ......")
     if debug_level == 1 or debug_level == 2:
         now = datetime.now()
         print('Start DateTime:', now)
@@ -1858,11 +1893,9 @@ def pxc_software_reports():
             customerId = row['customerId']
             successTrackId = row['successTrackId']
             customerName = row['customerName']
-            if debug_level == 1 or debug_level == 2:
-                print("====================\n\n")
-                print("Software data for Customer:", customerName,
-                      "on Success Tracks:", successTrackId)
+            print(f"\nScanning software data for {customerName}")
             if not successTrackId == "N/A":
+                token_time_check()
                 url = (pxc_url_customers + "/" + customerId + "/reports")
                 data_payload = json.dumps({"reportName": "software", "successTrackId": successTrackId})
                 headers = {'Authorization': f'Bearer {token}'}
@@ -1879,164 +1912,171 @@ def pxc_software_reports():
                           "\nHTTP Code:", response.status_code,
                           "\nReview API Headers:", response.headers,
                           "\nResponse Body:", response.content)
-                try:
-                    if bool(response.headers["location"]) is True:
-                        pass
-                    else:
-                        raise KeyError
-                except KeyError:
-                    print("\n!!!!!!!!\nException Thrown for", "Customer:", customerName,
-                          "on Success Tracks:", successTrackId,
-                          "Report Failed to Download\n")
-                    print("Report request URL:", url,
-                          "\nReport details:", data_payload,
-                          "\nHTTP Code:", response.status_code,
-                          "\nReview API Headers:", response.headers,
-                          "\nResponse Body:", response.content)
-                    while response.status_code >= 400:
-                        print(f"Pausing for {wait_time} seconds before re-request...")
-                        time.sleep(wait_time)
-                        print("Resuming...")
-                        print("Making API Call again with the following...")
-                        print("URL: ", url)
-                        print("Data Payload: ", data_payload)
-                        response = requests.request(
-                            "POST",
-                            url,
-                            headers=headers,
-                            data=data_payload,
-                            verify=True
-                        )
+                if response.text.__contains__("Customer admin has not provided access."):
+                    print(f"Customer admin has not provided access on Success Track {successTrackId}")
+                if not (response.text.__contains__("Customer admin has not provided access.")):
+                    try:
+                        if bool(response.headers["location"]) is True:
+                            pass
+                        else:
+                            raise KeyError
+                    except KeyError:
+                        print("\n!!!!!!!!\nException Thrown for ", customerName,
+                              "on Success Track ", successTrackId,
+                              "Report Failed to Download\n")
                         print("Report request URL:", url,
                               "\nReport details:", data_payload,
                               "\nHTTP Code:", response.status_code,
                               "\nReview API Headers:", response.headers,
                               "\nResponse Body:", response.content)
-                        print("Review for", "Customer:", customerName, "on Success Tracks:", successTrackId,
-                              "Report Failed to Download\n")
-                location = response.headers["location"]
-                json_filename = (location.split('/')[-1] + '.json')
-                tries = 1
-                print("")
-                while True:
-                    time.sleep(tries)
-                    print("Scanning for data...")
-                    filename = (temp_dir + location.split('/')[-1] + '.zip')
-                    headers = {'Authorization': f'Bearer {token}'}
-                    response = requests.request("GET", location, headers=headers, data=payload)
-                    if debug_level == 2:
-                        print("\nLocation URL Returned:", location,
-                              "\nHTTP Code:", response.status_code,
-                              "\nReview API Headers:", response.headers,
-                              "\nResponse Body:", response.content, "\nWait Time:", tries)
-                    try:
-                        with open(filename, 'wb') as file:
-                            file.write(response.content)
-                        with open(filename, "rb") as file:
-                            if file.read() and response.status_code == 200:
-                                with zipfile.ZipFile(filename, 'r') as zip_file:
-                                    zip_file.extractall(temp_dir)
-                                    if tries >= 2:
-                                        if debug_level == 2:
-                                            print("Success on retry!\nContinuing\n", end="")
-                            else:
-                                print("\nDownload Failed")
-                                raise Exception("File Corrupted")
-                        os.remove(filename)
-                    except Exception as FileCorruptError:
+                        while response.status_code >= 400:
+                            print(f"Pausing for {wait_time} seconds before re-request...")
+                            time.sleep(wait_time)
+                            print("Resuming...")
+                            print("Making API Call again with the following...")
+                            print("URL: ", url)
+                            print("Data Payload: ", data_payload)
+                            response = requests.request(
+                                "POST",
+                                url,
+                                headers=headers,
+                                data=data_payload,
+                                verify=True
+                            )
+                            print("Report request URL:", url,
+                                  "\nReport details:", data_payload,
+                                  "\nHTTP Code:", response.status_code,
+                                  "\nReview API Headers:", response.headers,
+                                  "\nResponse Body:", response.content)
+                            print("Review for", "Customer:", customerName, "on Success Track ", successTrackId,
+                                  "Report Failed to Download\n")
+                    location = response.headers["location"]
+                    json_filename = (location.split('/')[-1] + '.json')
+                    tries = 1
+                    while True:
+                        time.sleep(tries)
+                        print("Scanning for data...")
+                        filename = (temp_dir + location.split('/')[-1] + '.zip')
+                        headers = {'Authorization': f'Bearer {token}'}
+                        response = requests.request("GET", location, headers=headers, data=payload)
                         if debug_level == 2:
-                            print("\nDeleting file..." + str(filename) + " " +
-                                  str(FileCorruptError) + "\nRetrying....", end="")
-                            print(f"Pausing for {wait_time} seconds before retrying...", end="")
-                        time.sleep(wait_time * tries)  # increase the wait with the number of retries
-                        if tries >= 20:
+                            print("\nLocation URL Returned:", location,
+                                  "\nHTTP Code:", response.status_code,
+                                  "\nReview API Headers:", response.headers,
+                                  "\nResponse Body:", response.content, "\nWait Time:", tries)
+                        try:
+                            with open(filename, 'wb') as file:
+                                file.write(response.content)
+                            with open(filename, "rb") as file:
+                                if file.read() and response.status_code == 200:
+                                    with zipfile.ZipFile(filename, 'r') as zip_file:
+                                        zip_file.extractall(temp_dir)
+                                        if tries >= 2:
+                                            if debug_level == 2:
+                                                print("Success on retry!\nContinuing\n", end="")
+                                else:
+                                    print("\nDownload Failed")
+                                    raise Exception("File Corrupted")
+                            # os.remove(filename)
+                        except Exception as FileCorruptError:
+                            if debug_level == 2:
+                                print("\nDeleting file..." + str(filename) + " " +
+                                      str(FileCorruptError) + "\nRetrying....", end="")
+                                print(f"Pausing for {wait_time} seconds before retrying...", end="")
+                            time.sleep(wait_time * tries)  # increase the wait with the number of retries
+                            if tries >= 3:
+                                break
+                        else:
                             break
+                        finally:
+                            tries += 1
+                    if useProductionURL == "True":
+                        input_json_file = str(temp_dir + customerId + "_Software_" + json_filename)
                     else:
-                        break
-                    finally:
-                        tries += 1
-                if useProductionURL == "True":
-                    input_json_file = str(temp_dir + customerId + "_Software_" + json_filename)
-                else:
-                    input_json_file = str(temp_dir + json_filename)
-                if debug_level == 1 or debug_level == 2:
-                    print("\nReading file:", input_json_file)
-                with open(input_json_file, 'r', encoding='utf-8') as inputTarget:
-                    data = json.load(inputTarget)
-                    customerId = data['metadata']['customerId']
-                    totalCount = data['metadata']['totalCount']
-                    items = data['items']
-                if outputFormat == 1 or outputFormat == 3:
-                    if totalCount > 0:
-                        print(f"\nFound Software Data on Success Track {successTrackId} for customer {customerName}")
-                        for item in items:
-                            assetName = str(item['assetName'])
-                            assetId = str(item['assetId']).replace(",", "_")
-                            productId = str(item['productId'])
-                            softwareType = str(item['softwareType']).replace(",", " ")
-                            softwareRelease = str(item['softwareRelease'])
-                            successTrack = item['successTrack']
-                            endOfLifeAnnounced = str(item['endOfLifeAnnounced'])
-                            if endOfLifeAnnounced == "None":
-                                endOfLifeAnnounced = ""
-                            endOfSoftwareMaintenance = str(item['endOfSoftwareMaintenance'])
-                            if endOfSoftwareMaintenance == "None":
-                                endOfSoftwareMaintenance = ""
-                            endOfSale = str(item['endOfSale'])
-                            if endOfSale == "None":
-                                endOfSale = ""
-                            lastShip = str(item['lastShip'])
-                            if lastShip == "None":
-                                lastShip = ""
-                            endOfVulnerabilitySecuritySupport = str(item['endOfVulnerabilitySecuritySupport'])
-                            if endOfVulnerabilitySecuritySupport == "None":
-                                endOfVulnerabilitySecuritySupport = ""
-                            ldosDate = str(item['ldosDate'])
-                            if ldosDate == "None":
-                                ldosDate = ""
-                            for track in successTrack:
-                                successTrackId = track['id']
-                                useCases = track['useCases']
-                                for useCase in useCases:
-                                    if outputFormat == 1 or outputFormat == 3:
-                                        with open(software, 'a', encoding="utf-8", newline='') as report_target:
-                                            writer = csv.writer(report_target,
-                                                                delimiter=' ',
-                                                                quotechar=' ',
-                                                                quoting=csv.QUOTE_MINIMAL)
-                                            CSV_Data = (customerId + ',' +
-                                                        successTrackId + ',' +
-                                                        useCase + ',' +
-                                                        assetName + ',' +
-                                                        assetId + ',' +
-                                                        productId + ',' +
-                                                        softwareType + ',' +
-                                                        softwareRelease + ',' +
-                                                        endOfLifeAnnounced + ',' +
-                                                        endOfSoftwareMaintenance + ',' +
-                                                        endOfSale + ',' +
-                                                        lastShip + ',' +
-                                                        endOfVulnerabilitySecuritySupport + ',' +
-                                                        ldosDate)
-                                            writer.writerow(CSV_Data.split())
-                        if debug_level == 1 or debug_level == 2:
-                            print("Success")
-                else:
-                    print("\nNo Software Data Found for Customer:", customerName,
-                          "\nSkipping this record and continuing....\n", end="")
-                if outputFormat == 1 or outputFormat == 2:
-                    if totalCount > 0:
-                        print(f"Saving {json_output_dir}{customerId}_Software_{json_filename}")
-                        shutil.copy(input_json_file, json_output_dir)
-                    os.remove(input_json_file)
+                        input_json_file = str(temp_dir + json_filename)
+                    if debug_level == 1 or debug_level == 2:
+                        print("\nReading file:", input_json_file)
+                    if not os.path.isfile(input_json_file):
+                        print("File Not Found, Skipping.....")
+                    if os.path.isfile(input_json_file):
+                        with open(input_json_file, 'r', encoding='utf-8') as inputTarget:
+                            data = json.load(inputTarget)
+                            customerId = data['metadata']['customerId']
+                            totalCount = data['metadata']['totalCount']
+                            items = data['items']
+                        if outputFormat == 1 or outputFormat == 3:
+                            if totalCount > 0:
+                                print(f"Found Software Data on Success Track {successTrackId} for {customerName}")
+                                for item in items:
+                                    assetName = str(item['assetName'])
+                                    assetId = str(item['assetId']).replace(",", "_")
+                                    productId = str(item['productId'])
+                                    softwareType = str(item['softwareType']).replace(",", " ")
+                                    softwareRelease = str(item['softwareRelease'])
+                                    successTrack = item['successTrack']
+                                    endOfLifeAnnounced = str(item['endOfLifeAnnounced'])
+                                    if endOfLifeAnnounced == "None":
+                                        endOfLifeAnnounced = ""
+                                    endOfSoftwareMaintenance = str(item['endOfSoftwareMaintenance'])
+                                    if endOfSoftwareMaintenance == "None":
+                                        endOfSoftwareMaintenance = ""
+                                    endOfSale = str(item['endOfSale'])
+                                    if endOfSale == "None":
+                                        endOfSale = ""
+                                    lastShip = str(item['lastShip'])
+                                    if lastShip == "None":
+                                        lastShip = ""
+                                    endOfVulnerabilitySecuritySupport = str(item['endOfVulnerabilitySecuritySupport'])
+                                    if endOfVulnerabilitySecuritySupport == "None":
+                                        endOfVulnerabilitySecuritySupport = ""
+                                    ldosDate = str(item['ldosDate'])
+                                    if ldosDate == "None":
+                                        ldosDate = ""
+                                    for track in successTrack:
+                                        successTrackId = track['id']
+                                        useCases = track['useCases']
+                                        for useCase in useCases:
+                                            if outputFormat == 1 or outputFormat == 3:
+                                                with open(software, 'a', encoding="utf-8", newline='') as report_target:
+                                                    writer = csv.writer(report_target,
+                                                                        delimiter=' ',
+                                                                        quotechar=' ',
+                                                                        quoting=csv.QUOTE_MINIMAL)
+                                                    CSV_Data = (customerId + ',' +
+                                                                successTrackId + ',' +
+                                                                useCase + ',' +
+                                                                assetName + ',' +
+                                                                assetId + ',' +
+                                                                productId + ',' +
+                                                                softwareType + ',' +
+                                                                softwareRelease + ',' +
+                                                                endOfLifeAnnounced + ',' +
+                                                                endOfSoftwareMaintenance + ',' +
+                                                                endOfSale + ',' +
+                                                                lastShip + ',' +
+                                                                endOfVulnerabilitySecuritySupport + ',' +
+                                                                ldosDate)
+                                                    writer.writerow(CSV_Data.split())
+                                if debug_level == 1 or debug_level == 2:
+                                    print("Success")
+                            else:
+                                print(f"No Software Data Found For Success Track {successTrackId}")
+                        else:
+                            print(f"No Software Data Found For Success Track {successTrackId}"
+                                  f"\nSkipping this record and continuing....")
+                        if outputFormat == 1 or outputFormat == 2:
+                            if totalCount > 0:
+                                print(f"Saving {json_output_dir}{customerId}_Software_{json_filename}")
+                                shutil.copy(input_json_file, json_output_dir)
+                            os.remove(input_json_file)
             else:
-                print("\nNo Software Data Found For Customer:", customerName,
-                      "\nSkipping this record and continuing....")
+                print(f"No Software Data Found For Success Track {successTrackId}"
+                      f"\nSkipping this record and continuing....")
     print("\nSearch Completed!")
     if debug_level == 1 or debug_level == 2:
         now = datetime.now()
         print('Stop DateTime:', now)
-    print("====================\n\n")
+    print("====================\n")
 
 
 # Function to request, download and process Purchased Licenses report data from PX Cloud
@@ -2044,11 +2084,10 @@ def pxc_software_reports():
 # CSV Naming Convention: Purchased_Licenses.csv
 # JSON Naming Convention: {Customer ID}_Purchased_Licenses_{UniqueReportID}.json
 def pxc_purchased_licenses_reports():
-    token_time_check()
     print("******************************************************************")
     print("****************** Running Purchased Licenses ********************")
     print("******************************************************************")
-    print("Searching ......\n", end="")
+    print("Searching ......")
     if debug_level == 1 or debug_level == 2:
         now = datetime.now()
         print('Start DateTime:', now)
@@ -2072,11 +2111,9 @@ def pxc_purchased_licenses_reports():
             customerId = row['customerId']
             successTrackId = row['successTrackId']
             customerName = row['customerName']
-            if debug_level == 1 or debug_level == 2:
-                print("====================\n\n")
-                print("Purchased Licenses data for Customer:", customerName,
-                      "on Success Tracks:", successTrackId)
+            print(f"\nScanning purchased Licenses data for {customerName}")
             if not successTrackId == "N/A":
+                token_time_check()
                 url = (pxc_url_customers + "/" + customerId + "/reports")
                 data_payload = json.dumps({"reportName": "PurchasedLicenses", "successTrackId": successTrackId})
                 headers = {'Authorization': f'Bearer {token}'}
@@ -2093,153 +2130,159 @@ def pxc_purchased_licenses_reports():
                           "\nHTTP Code:", response.status_code,
                           "\nReview API Headers:", response.headers,
                           "\nResponse Body:", response.content)
-                try:
-                    if bool(response.headers["location"]) is True:
-                        pass
-                    else:
-                        raise KeyError
-                except KeyError:
-                    print("\n!!!!!!!!\nException Thrown for", "Customer:", customerName,
-                          "on Success Tracks:", successTrackId,
-                          "Report Failed to Download\n")
-                    print("Report request URL:", url,
-                          "\nReport details:", data_payload,
-                          "\nHTTP Code:", response.status_code,
-                          "\nReview API Headers:", response.headers,
-                          "\nResponse Body:", response.content)
-                    while response.status_code >= 400:
-                        print(f"Pausing for {wait_time} seconds before re-request...")
-                        time.sleep(wait_time)
-                        print("Resuming...")
-                        print("Making API Call again with the following...")
-                        print("URL: ", url)
-                        print("Data Payload: ", data_payload)
-                        response = requests.request(
-                            "POST",
-                            url,
-                            headers=headers,
-                            data=data_payload,
-                            verify=True
-                        )
+                if response.text.__contains__("Customer admin has not provided access."):
+                    print(f"Customer admin has not provided access on Success Track {successTrackId}")
+                if not (response.text.__contains__("Customer admin has not provided access.")):
+                    try:
+                        if bool(response.headers["location"]) is True:
+                            pass
+                        else:
+                            raise KeyError
+                    except KeyError:
+                        print("\n!!!!!!!!\nException Thrown for", "Customer:", customerName,
+                              "on Success Track ", successTrackId,
+                              "Report Failed to Download\n")
                         print("Report request URL:", url,
                               "\nReport details:", data_payload,
                               "\nHTTP Code:", response.status_code,
                               "\nReview API Headers:", response.headers,
                               "\nResponse Body:", response.content)
-                        print("Review for", "Customer:", customerId, "on Success Tracks:", successTrackId,
-                              "Report Failed to Download\n")
-                location = response.headers["location"]
-                json_filename = (location.split('/')[-1] + '.json')
-                tries = 1
-                print("")
-                while True:
-                    time.sleep(tries)
-                    print("Scanning for data...")
-                    filename = (temp_dir + location.split('/')[-1] + '.zip')
-                    headers = {'Authorization': f'Bearer {token}'}
-                    response = requests.request("GET", location, headers=headers, data=payload)
-                    if debug_level == 2:
-                        print("\nLocation URL Returned:", location,
-                              "\nHTTP Code:", response.status_code,
-                              "\nReview API Headers:", response.headers,
-                              "\nResponse Body:", response.content, "\nWait Time:", tries)
-                    try:
-                        with open(filename, 'wb') as file:
-                            file.write(response.content)
-                        with open(filename, "rb") as file:
-                            if file.read() and response.status_code == 200:
-                                with zipfile.ZipFile(filename, 'r') as zip_file:
-                                    zip_file.extractall(temp_dir)
-                                    if tries >= 2:
-                                        if debug_level == 2:
-                                            print("Success on retry!\nContinuing\n", end="")
-                            else:
-                                print("Download Failed")
-                                raise Exception("File Corrupted")
-                        os.remove(filename)
-                    except Exception as FileCorruptError:
+                        while response.status_code >= 400:
+                            print(f"Pausing for {wait_time} seconds before re-request...")
+                            time.sleep(wait_time)
+                            print("Resuming...")
+                            print("Making API Call again with the following...")
+                            print("URL: ", url)
+                            print("Data Payload: ", data_payload)
+                            response = requests.request(
+                                "POST",
+                                url,
+                                headers=headers,
+                                data=data_payload,
+                                verify=True
+                            )
+                            print("Report request URL:", url,
+                                  "\nReport details:", data_payload,
+                                  "\nHTTP Code:", response.status_code,
+                                  "\nReview API Headers:", response.headers,
+                                  "\nResponse Body:", response.content)
+                            print("Review for", "Customer:", customerId, "on Success Track ", successTrackId,
+                                  "Report Failed to Download\n")
+                    location = response.headers["location"]
+                    json_filename = (location.split('/')[-1] + '.json')
+                    tries = 1
+                    while True:
+                        time.sleep(tries)
+                        print("Scanning for data...")
+                        filename = (temp_dir + location.split('/')[-1] + '.zip')
+                        headers = {'Authorization': f'Bearer {token}'}
+                        response = requests.request("GET", location, headers=headers, data=payload)
                         if debug_level == 2:
-                            print("\nDeleting file..." + str(filename) + " " +
-                                  str(FileCorruptError) + "\nRetrying....", end="")
-                            print(f"Pausing for {wait_time} seconds before retrying...", end="")
-                        time.sleep(wait_time * tries)  # increase the wait with the number of retries
-                        if tries >= 20:
+                            print("\nLocation URL Returned:", location,
+                                  "\nHTTP Code:", response.status_code,
+                                  "\nReview API Headers:", response.headers,
+                                  "\nResponse Body:", response.content, "\nWait Time:", tries)
+                        try:
+                            with open(filename, 'wb') as file:
+                                file.write(response.content)
+                            with open(filename, "rb") as file:
+                                if file.read() and response.status_code == 200:
+                                    with zipfile.ZipFile(filename, 'r') as zip_file:
+                                        zip_file.extractall(temp_dir)
+                                        if tries >= 2:
+                                            if debug_level == 2:
+                                                print("Success on retry!\nContinuing\n", end="")
+                                else:
+                                    print("Download Failed")
+                                    raise Exception("File Corrupted")
+                            # os.remove(filename)
+                        except Exception as FileCorruptError:
+                            if debug_level == 2:
+                                print("\nDeleting file..." + str(filename) + " " +
+                                      str(FileCorruptError) + "\nRetrying....", end="")
+                                print(f"Pausing for {wait_time} seconds before retrying...", end="")
+                            time.sleep(wait_time * tries)  # increase the wait with the number of retries
+                            if tries >= 3:
+                                break
+                        else:
                             break
+                        finally:
+                            tries += 1
+                    if useProductionURL == "True":
+                        input_json_file = str(temp_dir + customerId + "_PurchasedLicenses_" + json_filename)
                     else:
-                        break
-                    finally:
-                        tries += 1
-                if useProductionURL == "True":
-                    input_json_file = str(temp_dir + customerId + "_PurchasedLicenses_" + json_filename)
-                else:
-                    input_json_file = str(temp_dir + json_filename)
-                if debug_level == 1 or debug_level == 2:
-                    print("\nReading file:", input_json_file)
-                with open(input_json_file, 'r', encoding='utf-8') as inputTarget:
-                    data = json.load(inputTarget)
-                    customerId = data['metadata']['customerId']
-                    totalCount = data['metadata']['totalCount']
-                    items = data['items']
-                if outputFormat == 1 or outputFormat == 3:
-                    if totalCount > 0:
-                        print(f"\nFound Purchased Licenses Data on Success Track {successTrackId} "
-                              f"for customer {customerName}")
-                        for item in items:
-                            licenseId = str(item['license'])
-                            licenseLevel = str(item['licenseLevel'])
-                            purchasedQuantity = str(item['purchasedQuantity'])
-                            productFamily = str(item['productFamily'])
-                            licenseStartDate = str(item['licenseStartDate'])
-                            if licenseStartDate == "None":
-                                licenseStartDate = ""
-                            licenseEndDate = str(item['licenseEndDate'])
-                            if licenseEndDate == "None":
-                                licenseEndDate = ""
-                            contractNumber = str(item['contractNumber'])
-                            if contractNumber == "None":
-                                contractNumber = ""
-                            successTrack = item['successTrack']
-                            for track in successTrack:
-                                successTracksId = track['id']
-                                useCases = track['useCases']
-                                for useCase in useCases:
-                                    useCaseId = useCase
-                                    if outputFormat == 1 or outputFormat == 3:
-                                        with open(purchasedLicenses, 'a', encoding="utf-8", newline='') \
-                                                as report_target:
-                                            writer = csv.writer(report_target,
-                                                                delimiter=' ',
-                                                                quotechar=' ',
-                                                                quoting=csv.QUOTE_MINIMAL)
-                                            CSV_Data = (customerId + ',' +
-                                                        successTracksId + ',' +
-                                                        useCaseId + "," +
-                                                        licenseId + ',' +
-                                                        licenseLevel + ',' +
-                                                        purchasedQuantity + ',' +
-                                                        productFamily + ',' +
-                                                        licenseStartDate + ',' +
-                                                        licenseEndDate + ',' +
-                                                        contractNumber)
-                                            writer.writerow(CSV_Data.split())
-                        if debug_level == 1 or debug_level == 2:
-                            print("Success")
-                else:
-                    print("\nNo Purchased Licenses Data Found .... Skipping for Customer:", customerName,
-                          "\nSkipping this record and continuing....\n", end="")
-                if outputFormat == 1 or outputFormat == 2:
-                    if totalCount > 0:
-                        print(f"Saving {json_output_dir}{customerId}_Purchased Licenses_{json_filename}")
-                        shutil.copy(input_json_file, json_output_dir)
-                    os.remove(input_json_file)
+                        input_json_file = str(temp_dir + json_filename)
+                    if debug_level == 1 or debug_level == 2:
+                        print(f"\nReading file:{input_json_file}")
+                    if not os.path.isfile(input_json_file):
+                        print("File Not Found, Skipping.....")
+                    if os.path.isfile(input_json_file):
+                        with open(input_json_file, 'r', encoding='utf-8') as inputTarget:
+                            data = json.load(inputTarget)
+                            customerId = data['metadata']['customerId']
+                            totalCount = data['metadata']['totalCount']
+                            items = data['items']
+                        if outputFormat == 1 or outputFormat == 3:
+                            if totalCount > 0:
+                                print(f"Found Purchased Licenses Data on Success Track {successTrackId}")
+                                for item in items:
+                                    licenseId = str(item['license'])
+                                    licenseLevel = str(item['licenseLevel'])
+                                    purchasedQuantity = str(item['purchasedQuantity'])
+                                    productFamily = str(item['productFamily'])
+                                    licenseStartDate = str(item['licenseStartDate'])
+                                    if licenseStartDate == "None":
+                                        licenseStartDate = ""
+                                    licenseEndDate = str(item['licenseEndDate'])
+                                    if licenseEndDate == "None":
+                                        licenseEndDate = ""
+                                    contractNumber = str(item['contractNumber'])
+                                    if contractNumber == "None":
+                                        contractNumber = ""
+                                    successTrack = item['successTrack']
+                                    for track in successTrack:
+                                        successTracksId = track['id']
+                                        useCases = track['useCases']
+                                        for useCase in useCases:
+                                            useCaseId = useCase
+                                            if outputFormat == 1 or outputFormat == 3:
+                                                with open(purchasedLicenses, 'a', encoding="utf-8", newline='') \
+                                                        as report_target:
+                                                    writer = csv.writer(report_target,
+                                                                        delimiter=' ',
+                                                                        quotechar=' ',
+                                                                        quoting=csv.QUOTE_MINIMAL)
+                                                    CSV_Data = (customerId + ',' +
+                                                                successTracksId + ',' +
+                                                                useCaseId + "," +
+                                                                licenseId + ',' +
+                                                                licenseLevel + ',' +
+                                                                purchasedQuantity + ',' +
+                                                                productFamily + ',' +
+                                                                licenseStartDate + ',' +
+                                                                licenseEndDate + ',' +
+                                                                contractNumber)
+                                                    writer.writerow(CSV_Data.split())
+                                if debug_level == 1 or debug_level == 2:
+                                    print("Success")
+                            else:
+                                print(f"No Purchased Licenses Data Found For Success Track {successTrackId}")
+                        else:
+                            print(f"No Purchased Licenses Data Found For Success Track {successTrackId}"
+                                  f"\nSkipping this record and continuing....")
+                        if outputFormat == 1 or outputFormat == 2:
+                            if totalCount > 0:
+                                print(f"Saving {json_output_dir}{customerId}_Purchased Licenses_{json_filename}")
+                                shutil.copy(input_json_file, json_output_dir)
+                            os.remove(input_json_file)
             else:
-                print("\nNo Purchased Licenses Data Found For Customer:", customerName,
-                      "\nSkipping this record and continuing....")
+                print(f"No Purchased Licenses Data Found For Success Track {successTrackId}"
+                      f"\nSkipping this record and continuing....")
     print("\nSearch Completed!")
     if debug_level == 1 or debug_level == 2:
         now = datetime.now()
         print('Stop DateTime:', now)
-    print("====================\n\n")
+    print("====================\n")
 
 
 # Function to request, download and process Licenses report data from PX Cloud
@@ -2247,7 +2290,6 @@ def pxc_purchased_licenses_reports():
 # CSV Naming Convention: Licenses.csv
 # JSON Naming Convention: {Customer ID}_Licenses_{UniqueReportID}.json
 def pxc_licenses_reports():
-    token_time_check()
     print("******************************************************************")
     print("******************** Running License Report **********************")
     print("******************************************************************")
@@ -2280,11 +2322,9 @@ def pxc_licenses_reports():
             customerId = row['customerId']
             successTrackId = row['successTrackId']
             customerName = row['customerName']
-            if debug_level == 1 or debug_level == 2:
-                print("====================\n\n")
-                print("License data for Customer:", customerName,
-                      "on Success Tracks:", successTrackId)
+            print(f"\nScanning license data for {customerName}")
             if not successTrackId == "N/A":
+                token_time_check()
                 url = (pxc_url_customers + "/" + customerId + "/reports")
                 data_payload = json.dumps({"reportName": "Licenses", "successTrackId": successTrackId})
                 headers = {'Authorization': f'Bearer {token}'}
@@ -2301,174 +2341,868 @@ def pxc_licenses_reports():
                           "\nHTTP Code:", response.status_code,
                           "\nReview API Headers:", response.headers,
                           "\nResponse Body:", response.content)
-                try:
-                    if bool(response.headers["location"]) is True:
-                        pass
-                    else:
-                        raise KeyError
-                except KeyError:
-                    print("\n!!!!!!!!\nException Thrown for", "Customer:", customerName,
-                          "on Success Tracks:", successTrackId,
-                          "Report Failed to Download\n")
-                    print("Report request URL:", url,
-                          "\nReport details:", data_payload,
-                          "\nHTTP Code:", response.status_code,
-                          "\nReview API Headers:", response.headers,
-                          "\nResponse Body:", response.content)
-                    while response.status_code >= 400:
-                        print(f"Pausing for {wait_time} seconds before re-request...")
-                        time.sleep(wait_time)
-                        print("Resuming...")
-                        print("Making API Call again with the following...")
-                        print("URL: ", url)
-                        print("Data Payload: ", data_payload)
-                        response = requests.request(
-                            "POST",
-                            url,
-                            headers=headers,
-                            data=data_payload,
-                            verify=True
-                        )
+                if response.text.__contains__("Customer admin has not provided access."):
+                    print(f"Customer admin has not provided access on Success Track {successTrackId}")
+                if not (response.text.__contains__("Customer admin has not provided access.")):
+                    try:
+                        if bool(response.headers["location"]) is True:
+                            pass
+                        else:
+                            raise KeyError
+                    except KeyError:
+                        print("\n!!!!!!!!\nException Thrown for", "Customer:", customerName,
+                              "on Success Track ", successTrackId,
+                              "Report Failed to Download\n")
                         print("Report request URL:", url,
                               "\nReport details:", data_payload,
                               "\nHTTP Code:", response.status_code,
                               "\nReview API Headers:", response.headers,
                               "\nResponse Body:", response.content)
-                        print("Review for", "Customer:", customerName, "on Success Tracks:", successTrackId,
-                              "Report Failed to Download\n")
-                location = response.headers["location"]
-                json_filename = (location.split('/')[-1] + '.json')
-                tries = 1
-                print("")
-                while True:
-                    time.sleep(tries)
-                    print("Scanning for data...")
-                    filename = (temp_dir + location.split('/')[-1] + '.zip')
-                    headers = {'Authorization': f'Bearer {token}'}
-                    response = requests.request("GET", location, headers=headers, data=payload)
-                    if debug_level == 2:
-                        print("\nLocation URL Returned:", location,
-                              "\nHTTP Code:", response.status_code,
-                              "\nReview API Headers:", response.headers,
-                              "\nResponse Body:", response.content, "\nWait Time:", tries)
-
-                    try:
-                        with open(filename, 'wb') as file:
-                            file.write(response.content)
-                        with open(filename, "rb") as file:
-                            if file.read() and response.status_code == 200:
-                                with zipfile.ZipFile(filename, 'r') as zip_file:
-                                    zip_file.extractall(temp_dir)
-                                    if tries >= 2:
-                                        if debug_level == 2:
-                                            print("Success on retry!\nContinuing\n", end="")
-                            else:
-                                print("Download Failed")
-                                raise Exception("File Corrupted")
-                        os.remove(filename)
-                    except Exception as FileCorruptError:
+                        while response.status_code >= 400:
+                            print(f"Pausing for {wait_time} seconds before re-request...")
+                            time.sleep(wait_time)
+                            print("Resuming...")
+                            print("Making API Call again with the following...")
+                            print("URL: ", url)
+                            print("Data Payload: ", data_payload)
+                            response = requests.request(
+                                "POST",
+                                url,
+                                headers=headers,
+                                data=data_payload,
+                                verify=True
+                            )
+                            print("Report request URL:", url,
+                                  "\nReport details:", data_payload,
+                                  "\nHTTP Code:", response.status_code,
+                                  "\nReview API Headers:", response.headers,
+                                  "\nResponse Body:", response.content)
+                            print("Review for", "Customer:", customerName, "on Success Track ", successTrackId,
+                                  "Report Failed to Download\n")
+                    location = response.headers["location"]
+                    json_filename = (location.split('/')[-1] + '.json')
+                    tries = 1
+                    while True:
+                        time.sleep(tries)
+                        print("Scanning for data...")
+                        filename = (temp_dir + location.split('/')[-1] + '.zip')
+                        headers = {'Authorization': f'Bearer {token}'}
+                        response = requests.request("GET", location, headers=headers, data=payload)
                         if debug_level == 2:
-                            print("\nDeleting file..." + str(filename) + " " +
-                                  str(FileCorruptError) + "\nRetrying....", end="")
-                            print(f"Pausing for {wait_time} seconds before retrying...", end="")
-                        time.sleep(wait_time * tries)  # increase the wait with the number of retries
-                        if tries >= 20:
+                            print("\nLocation URL Returned:", location,
+                                  "\nHTTP Code:", response.status_code,
+                                  "\nReview API Headers:", response.headers,
+                                  "\nResponse Body:", response.content, "\nWait Time:", tries)
+
+                        try:
+                            with open(filename, 'wb') as file:
+                                file.write(response.content)
+                            with open(filename, "rb") as file:
+                                if file.read() and response.status_code == 200:
+                                    with zipfile.ZipFile(filename, 'r') as zip_file:
+                                        zip_file.extractall(temp_dir)
+                                        if tries >= 2:
+                                            if debug_level == 2:
+                                                print("Success on retry!\nContinuing\n", end="")
+                                else:
+                                    print("Download Failed")
+                                    raise Exception("File Corrupted")
+                            # os.remove(filename)
+                        except Exception as FileCorruptError:
+                            if debug_level == 2:
+                                print("\nDeleting file..." + str(filename) + " " +
+                                      str(FileCorruptError) + "\nRetrying....", end="")
+                                print(f"Pausing for {wait_time} seconds before retrying...", end="")
+                            time.sleep(wait_time * tries)  # increase the wait with the number of retries
+                            if tries >= 3:
+                                break
+                        else:
                             break
+                        finally:
+                            tries += 1
+                    if useProductionURL == "True":
+                        input_json_file = str(temp_dir + customerId + "_Licenses_" + json_filename)
                     else:
-                        break
-                    finally:
-                        tries += 1
-                if useProductionURL == "True":
-                    input_json_file = str(temp_dir + customerId + "_Licenses_" + json_filename)
-                else:
-                    input_json_file = str(temp_dir + json_filename)
-                if debug_level == 1 or debug_level == 2:
-                    print("\nReading file:", input_json_file)
-                with open(input_json_file, 'r', encoding='utf-8') as inputTarget:
-                    data = json.load(inputTarget)
-                    customerId = data['metadata']['customerId']
-                    totalCount = data['metadata']['totalCount']
-                    items = data['items']
-                if outputFormat == 1 or outputFormat == 3:
-                    if totalCount > 0:
-                        print(f"\nFound License Data on Success Track {successTrackId} for customer {customerName}")
-                        for item in items:
-                            assetId = str(item['assetId']).replace(",", "_")
-                            assetName = str(item['assetName']).replace(",", " ")
-                            productFamily = str(item['productFamily']).replace(",", " ")
-                            productType = str(item['productType']).replace(",", " ")
-                            connectionStatus = str(item['connectionStatus'])
-                            productDescription = str(item['productDescription']).replace(",", " ")
-                            licenseId = str(item['license'])
-                            try:
-                                licenseStartDate = str(item['licenseStartDate'])
-                                if licenseStartDate == "None":
-                                    licenseStartDate = ""
-                            except KeyError:
-                                licenseStartDate = ""
-                                pass
-                            try:
-                                licenseEndDate = str(item['licenseEndDate'])
-                                if licenseEndDate == "None":
-                                    licenseEndDate = ""
-                            except KeyError:
-                                licenseEndDate = ""
-                                pass
-                            try:
-                                contractNumber = str(item['contractNumber'])
-                                if contractNumber == "None":
-                                    contractNumber = ""
-                            except KeyError:
-                                contractNumber = ""
-                                pass
-                            subscriptionId = str(item['subscriptionId'])
-                            supportType = str(item['supportType']).replace(",", " ")
-                            successTrack = item['successTrack']
-                            for track in successTrack:
-                                successTracksId = track['id']
-                                useCases = track['useCases']
-                                for useCase in useCases:
-                                    useCaseId = useCase
-                                    if outputFormat == 1 or outputFormat == 3:
-                                        with open(licenses, 'a', encoding="utf-8", newline='') as report_target:
-                                            writer = csv.writer(report_target,
-                                                                delimiter=' ',
-                                                                quotechar=' ',
-                                                                quoting=csv.QUOTE_MINIMAL)
-                                            CSV_Data = (customerId + ',' +
-                                                        successTracksId + ',' +
-                                                        useCaseId + ',' +
-                                                        assetName + ',' +
-                                                        assetId + ',' +
-                                                        productFamily + ',' +
-                                                        productType + ',' +
-                                                        connectionStatus + ',' +
-                                                        productDescription + ',' +
-                                                        licenseId + ',' +
-                                                        licenseStartDate + ',' +
-                                                        licenseEndDate + ',' +
-                                                        contractNumber + ',' +
-                                                        subscriptionId + ',' +
-                                                        supportType)
-                                            writer.writerow(CSV_Data.split())
-                        if debug_level == 1 or debug_level == 2:
-                            print("Success")
-                else:
-                    print("\nNo License Data Found .... Skipping for Customer:", customerName,
-                          "\nSkipping this record and continuing....\n", end="")
-                if outputFormat == 1 or outputFormat == 2:
-                    if totalCount > 0:
-                        print(f"Saving JSON file for customer {customerName} on success track {successTrackId}")
-                        shutil.copy(input_json_file, json_output_dir)
-                    os.remove(input_json_file)
+                        input_json_file = str(temp_dir + json_filename)
+                    if debug_level == 1 or debug_level == 2:
+                        print(f"\nReading file:{input_json_file}")
+                    if not os.path.isfile(input_json_file):
+                        print("File Not Found, Skipping.....")
+                    if os.path.isfile(input_json_file):
+                        with open(input_json_file, 'r', encoding='utf-8') as inputTarget:
+                            data = json.load(inputTarget)
+                            customerId = data['metadata']['customerId']
+                            totalCount = data['metadata']['totalCount']
+                            items = data['items']
+                        if outputFormat == 1 or outputFormat == 3:
+                            if totalCount > 0:
+                                print(f"Found License Data on Success Track {successTrackId}")
+                                for item in items:
+                                    assetId = str(item['assetId']).replace(",", "_")
+                                    assetName = str(item['assetName']).replace(",", " ")
+                                    productFamily = str(item['productFamily']).replace(",", " ")
+                                    productType = str(item['productType']).replace(",", " ")
+                                    connectionStatus = str(item['connectionStatus'])
+                                    productDescription = str(item['productDescription']).replace(",", " ")
+                                    licenseId = str(item['license'])
+                                    try:
+                                        licenseStartDate = str(item['licenseStartDate'])
+                                        if licenseStartDate == "None":
+                                            licenseStartDate = ""
+                                    except KeyError:
+                                        licenseStartDate = ""
+                                        pass
+                                    try:
+                                        licenseEndDate = str(item['licenseEndDate'])
+                                        if licenseEndDate == "None":
+                                            licenseEndDate = ""
+                                    except KeyError:
+                                        licenseEndDate = ""
+                                        pass
+                                    try:
+                                        contractNumber = str(item['contractNumber'])
+                                        if contractNumber == "None":
+                                            contractNumber = ""
+                                    except KeyError:
+                                        contractNumber = ""
+                                        pass
+                                    subscriptionId = str(item['subscriptionId'])
+                                    supportType = str(item['supportType']).replace(",", " ")
+                                    successTrack = item['successTrack']
+                                    for track in successTrack:
+                                        successTracksId = track['id']
+                                        useCases = track['useCases']
+                                        for useCase in useCases:
+                                            useCaseId = useCase
+                                            if outputFormat == 1 or outputFormat == 3:
+                                                with open(licenses, 'a', encoding="utf-8", newline='') as report_target:
+                                                    writer = csv.writer(report_target,
+                                                                        delimiter=' ',
+                                                                        quotechar=' ',
+                                                                        quoting=csv.QUOTE_MINIMAL)
+                                                    CSV_Data = (customerId + ',' +
+                                                                successTracksId + ',' +
+                                                                useCaseId + ',' +
+                                                                assetName + ',' +
+                                                                assetId + ',' +
+                                                                productFamily + ',' +
+                                                                productType + ',' +
+                                                                connectionStatus + ',' +
+                                                                productDescription + ',' +
+                                                                licenseId + ',' +
+                                                                licenseStartDate + ',' +
+                                                                licenseEndDate + ',' +
+                                                                contractNumber + ',' +
+                                                                subscriptionId + ',' +
+                                                                supportType)
+                                                    writer.writerow(CSV_Data.split())
+                                if debug_level == 1 or debug_level == 2:
+                                    print("Success")
+                            else:
+                                print(f"No License Data Found For Success Track {successTrackId}")
+                        else:
+                            print(f"No License Data Found For Success Track {successTrackId}"
+                                  f"\nSkipping this record and continuing....")
+                        if outputFormat == 1 or outputFormat == 2:
+                            if totalCount > 0:
+                                print(f"Saving JSON file for customer {customerName} on success track {successTrackId}")
+                                shutil.copy(input_json_file, json_output_dir)
+                            os.remove(input_json_file)
             else:
-                print(f"\nNo License Data Found For Customer: {customerName} on success track:{successTrackId}"
+                print(f"No License Data Found For Success Track {successTrackId}"
                       f"\nSkipping this record and continuing....")
     print("\nSearch Completed!")
     if debug_level == 1 or debug_level == 2:
         now = datetime.now()
         print('Stop DateTime:', now)
-    print("====================\n\n")
+    print("====================\n")
+
+
+# Function to request, download and process Security Advisories report data from PX Cloud
+# This API provides security vulnerability information including CVE and CVSS for devices associated with customer ID.
+# CSV Naming Convention: Security_Advisories.csv
+# JSON Naming Convention: {Customer ID}_SecurityAdvisories_{UniqueReportID}.json
+def pxc_security_advisories_reports():
+    print("******************************************************************")
+    print("****************** Running Security Advisories *******************")
+    print("******************************************************************")
+    print("Searching ......")
+    if debug_level == 1 or debug_level == 2:
+        now = datetime.now()
+        print('Start DateTime:', now)
+    if outputFormat == 1 or outputFormat == 3:
+        with open(securityAdvisories, 'w', encoding="utf-8", newline='') as target:
+            CSV_Header = "customerId," \
+                         "successTrackId," \
+                         "useCaseId," \
+                         "assetName," \
+                         "assetId," \
+                         "ipAddress," \
+                         "serialNumber," \
+                         "advisoryId," \
+                         "impact," \
+                         "cvss," \
+                         "version," \
+                         "cve," \
+                         "published," \
+                         "updated," \
+                         "advisory," \
+                         "summary," \
+                         "url," \
+                         "additionalNotes," \
+                         "affectedStatus," \
+                         "affectedReason," \
+                         "softwareRelease," \
+                         "productId"
+            writeheader = csv.writer(target, delimiter=' ', quotechar=' ', quoting=csv.QUOTE_NONE)
+            writeheader.writerow(CSV_Header.split())
+    with open(customers, 'r') as cust_target:
+        custList = csv.DictReader(cust_target)
+        for row in custList:
+            customerId = row['customerId']
+            successTrackId = row['successTrackId']
+            customerName = row['customerName']
+            print(f"\nScanning security Advisories for {customerName}")
+            if not successTrackId == "N/A":
+                token_time_check()
+                url = (pxc_url_customers + "/" + customerId + "/reports")
+                data_payload = json.dumps({"reportName": "securityadvisories", "successTrackId": successTrackId})
+                headers = {'Authorization': f'Bearer {token}'}
+                response = requests.request(
+                    "POST",
+                    url,
+                    headers=headers,
+                    data=data_payload,
+                    verify=True
+                )
+                if debug_level == 2:
+                    print("Report request URL:", url,
+                          "\nReport details:", data_payload,
+                          "\nHTTP Code:", response.status_code,
+                          "\nReview API Headers:", response.headers,
+                          "\nResponse Body:", response.content)
+                if response.text.__contains__("Customer admin has not provided access."):
+                    print(f"Customer admin has not provided access on Success Track {successTrackId}")
+                if not (response.text.__contains__("Customer admin has not provided access.")):
+                    try:
+                        if bool(response.headers["location"]) is True:
+                            pass
+                        else:
+                            raise KeyError
+                    except KeyError:
+                        print("\n!!!!!!!!\nException Thrown for", "Customer:", customerName,
+                              "on Success Track ", successTrackId,
+                              "Report Failed to Download\n")
+                        print("Report request URL:", url,
+                              "\nReport details:", data_payload,
+                              "\nHTTP Code:", response.status_code,
+                              "\nReview API Headers:", response.headers,
+                              "\nResponse Body:", response.content)
+                        while response.status_code >= 400:
+                            print(f"Pausing for {wait_time} seconds before re-request...")
+                            time.sleep(wait_time)
+                            print("Resuming...")
+                            print("Making API Call again with the following...")
+                            print("URL: ", url)
+                            print("Data Payload: ", data_payload)
+                            response = requests.request(
+                                "POST",
+                                url,
+                                headers=headers,
+                                data=data_payload,
+                                verify=True
+                            )
+                            print("Report request URL:", url,
+                                  "\nReport details:", data_payload,
+                                  "\nHTTP Code:", response.status_code,
+                                  "\nReview API Headers:", response.headers,
+                                  "\nResponse Body:", response.content)
+                            print("Review for ", customerName, "on Success Track ", successTrackId,
+                                  "Report Failed to Download\n")
+                    location = response.headers["location"]
+                    json_filename = (location.split('/')[-1] + '.json')
+                    tries = 1
+                    while True:
+                        time.sleep(tries)
+                        print("Scanning for data...")
+                        filename = (temp_dir + location.split('/')[-1] + '.zip')
+                        headers = {'Authorization': f'Bearer {token}'}
+                        response = requests.request("GET", location, headers=headers, data=payload)
+                        if debug_level == 2:
+                            print("\nLocation URL Returned:", location,
+                                  "\nHTTP Code:", response.status_code,
+                                  "\nReview API Headers:", response.headers,
+                                  "\nResponse Body:", response.content, "\nWait Time:", tries)
+                        try:
+                            with open(filename, 'wb') as file:
+                                file.write(response.content)
+                            with open(filename, "rb") as file:
+                                if file.read() and response.status_code == 200:
+                                    with zipfile.ZipFile(filename, 'r') as zip_file:
+                                        zip_file.extractall(temp_dir)
+                                        if tries >= 2:
+                                            if debug_level == 2:
+                                                print("Success on retry!\nContinuing\n", end="")
+                                else:
+                                    print("\nDownload Failed :", filename)
+                                    raise Exception("File Corrupted")
+                                # os.remove(filename)
+                        except Exception as FileCorruptError:
+                            if debug_level == 2:
+                                print("\nDeleting file..." + str(filename) + " " +
+                                      str(FileCorruptError) + "\nRetrying....", end="")
+                                print(f"Pausing for {wait_time} seconds before retrying...", end="")
+                            time.sleep(wait_time * tries)  # increase the wait with the number of retries
+                            if tries >= 3:
+                                break
+                        else:
+                            break
+                        finally:
+                            tries += 1
+                    if useProductionURL == "True":
+                        input_json_file = str(temp_dir + customerId + "_SecurityAdvisories_" + json_filename)
+                    else:
+                        input_json_file = str(temp_dir + json_filename)
+                    if debug_level == 1 or debug_level == 2:
+                        print(f"\nReading file:{input_json_file}")
+                    if not os.path.isfile(input_json_file):
+                        print("File Not Found, Skipping.....")
+                    if os.path.isfile(input_json_file):
+                        with open(input_json_file, 'r', encoding='utf-8') as inputTarget:
+                            data = json.load(inputTarget)
+                            customerId = data['metadata']['customerId']
+                            totalCount = data['metadata']['totalCount']
+                            items = data['items']
+                        if outputFormat == 1 or outputFormat == 3:
+                            if totalCount > 0:
+                                print(f"Found Security Advisories on Success Track {successTrackId}")
+                                for item in items:
+                                    assetName = str(item['assetName'])
+                                    assetId = str(item['assetId']).replace(",", "_")
+                                    ipAddress = str(item['ipAddress'])
+                                    serialNumber = str(item['serialNumber'])
+                                    successTrack = item['successTrack']
+                                    advisoryId = str(item['advisoryId']).replace(",", " ")
+                                    impact = str(item['impact']).replace(",", " ")
+                                    cvss = str(item['cvss']).replace(",", " ")
+                                    version = str(item['version'])
+                                    cve = str(item['cve']).replace(",", " ")
+                                    published = str(item['published']).replace(",", " ")
+                                    updated = str(item['updated'])
+                                    advisory = str(item['advisory']).replace(",", " ")
+                                    summary = str(item['summary']).replace(",", " ")
+                                    url = str(item['url']).replace(",", " ")
+                                    additionalNotes = str(item['additionalNotes']).replace(",", " ")
+                                    affectedStatus = str(item['affectedStatus'])
+                                    affectedReasons = item['affectedReason']
+                                    softwareRelease = str(item['softwareRelease'])
+                                    productId = str(item['productId'])
+                                    for track in successTrack:
+                                        successTrackId = track['id']
+                                        useCases = track['useCases']
+                                        for useCase in useCases:
+                                            useCaseId = useCase
+                                            for reason in affectedReasons:
+                                                affectedReason = reason
+                                                with open(securityAdvisories, 'a', encoding="utf-8", newline='') \
+                                                        as report_target:
+                                                    writer = csv.writer(report_target,
+                                                                        delimiter=' ',
+                                                                        quotechar=' ',
+                                                                        quoting=csv.QUOTE_MINIMAL)
+                                                    CSV_Data = (customerId + ',' +
+                                                                successTrackId + ',' +
+                                                                useCaseId + ',' +
+                                                                assetName + ',' +
+                                                                assetId + ',' +
+                                                                ipAddress + ',' +
+                                                                serialNumber + ',' +
+                                                                advisoryId + ',' +
+                                                                impact + ',' +
+                                                                cvss + ',' +
+                                                                version + ',' +
+                                                                cve + ',' +
+                                                                published + ',' +
+                                                                updated + ',' +
+                                                                advisory + ',' +
+                                                                summary + ',' +
+                                                                url + ',' +
+                                                                additionalNotes + ',' +
+                                                                affectedStatus + ',' +
+                                                                affectedReason + ',' +
+                                                                softwareRelease + ',' +
+                                                                productId)
+                                                    writer.writerow(CSV_Data.split())
+                                if debug_level == 1 or debug_level == 2:
+                                    print("Success")
+                            else:
+                                print(f"No Security Advisories Found on Success Track {successTrackId}")
+                        else:
+                            print(f"No Security Advisories Data Found For Success Track {successTrackId}"
+                                  f"\nSkipping this record and continuing....")
+                        if outputFormat == 1 or outputFormat == 2:
+                            if totalCount > 0:
+                                print(f"Saving {json_output_dir}{customerId}_SecurityAdvisories_{json_filename}")
+                                shutil.copy(input_json_file, json_output_dir)
+                            os.remove(input_json_file)
+            else:
+                print(f"No Security Advisories Data Found For Success Track {successTrackId}"
+                      f"\nSkipping this record and continuing....")
+    print("\nSearch Completed!")
+    if debug_level == 1 or debug_level == 2:
+        now = datetime.now()
+        print('Stop DateTime:', now)
+    print("====================\n")
+
+
+# Function to request, download and process Field Notices report data from PX Cloud
+# This API gives details of all the notifications published and their associated details.
+# CSV Naming Convention: Field_Notices.csv
+# JSON Naming Convention: {Customer ID}_Field_Notices_{UniqueReportID}.json
+def pxc_field_notices_reports():
+    print("******************************************************************")
+    print("******************** Running Field Notices ***********************")
+    print("******************************************************************")
+    print("Searching ......")
+    if debug_level == 1 or debug_level == 2:
+        now = datetime.now()
+        print('Start DateTime:', now)
+    if outputFormat == 1 or outputFormat == 3:
+        with open(fieldNotices, 'w', encoding="utf-8", newline='') as target:
+            CSV_Header = "customerId," \
+                         "successTrackId," \
+                         "useCaseId," \
+                         "assetName," \
+                         "assetId," \
+                         "hwInstanceId," \
+                         "productId," \
+                         "serialNumber," \
+                         "fieldNoticeId," \
+                         "updated," \
+                         "title," \
+                         "created," \
+                         "url," \
+                         "additionalNotes," \
+                         "affectedStatus," \
+                         "affectedReason," \
+                         "fieldNoticeDescription," \
+                         "softwareRelease," \
+                         "ipAddress"
+            writeheader = csv.writer(target, delimiter=' ', quotechar=' ', quoting=csv.QUOTE_NONE)
+            writeheader.writerow(CSV_Header.split())
+    with open(customers, 'r') as cust_target:
+        custList = csv.DictReader(cust_target)
+        for row in custList:
+            customerId = row['customerId']
+            successTrackId = row['successTrackId']
+            customerName = row['customerName']
+            print(f"\nScanning Field Notices for {customerName}")
+            if not successTrackId == "N/A":
+                token_time_check()
+                url = (pxc_url_customers + "/" + customerId + "/reports")
+                data_payload = json.dumps({"reportName": "FieldNotices", "successTrackId": successTrackId})
+                headers = {'Authorization': f'Bearer {token}'}
+                response = requests.request(
+                    "POST",
+                    url,
+                    headers=headers,
+                    data=data_payload,
+                    verify=True
+                )
+                if debug_level == 2:
+                    print("Report request URL:", url,
+                          "\nReport details:", data_payload,
+                          "\nHTTP Code:", response.status_code,
+                          "\nReview API Headers:", response.headers,
+                          "\nResponse Body:", response.content)
+                if response.text.__contains__("Customer admin has not provided access."):
+                    print(f"Customer admin has not provided access on Success Track {successTrackId}")
+                if not (response.text.__contains__("Customer admin has not provided access.")):
+                    try:
+                        if bool(response.headers["location"]) is True:
+                            pass
+                        else:
+                            raise KeyError
+                    except KeyError:
+                        print("\n!!!!!!!!\nException Thrown for", "Customer:", customerName,
+                              "on Success Track ", successTrackId,
+                              "Report Failed to Download\n")
+                        print("Report request URL:", url,
+                              "\nReport details:", data_payload,
+                              "\nHTTP Code:", response.status_code,
+                              "\nReview API Headers:", response.headers,
+                              "\nResponse Body:", response.content)
+                        while response.status_code >= 400:
+                            print(f"Pausing for {wait_time} seconds before re-request...")
+                            time.sleep(wait_time)
+                            print("Resuming...")
+                            print("Making API Call again with the following...")
+                            print("URL: ", url)
+                            print("Data Payload: ", data_payload)
+                            response = requests.request(
+                                "POST",
+                                url,
+                                headers=headers,
+                                data=data_payload,
+                                verify=True
+                            )
+                            print("Report request URL:", url,
+                                  "\nReport details:", data_payload,
+                                  "\nHTTP Code:", response.status_code,
+                                  "\nReview API Headers:", response.headers,
+                                  "\nResponse Body:", response.content)
+                            print("Review for", "Customer:", customerName, "on Success Track ", successTrackId,
+                                  "Report Failed to Download\n")
+                    location = response.headers["location"]
+                    json_filename = (location.split('/')[-1] + '.json')
+                    tries = 1
+                    while True:
+                        time.sleep(tries)
+                        print("Scanning for data...")
+                        filename = (temp_dir + location.split('/')[-1] + '.zip')
+                        headers = {'Authorization': f'Bearer {token}'}
+                        response = requests.request("GET", location, headers=headers, data=payload)
+                        if debug_level == 2:
+                            print("\nLocation URL Returned:", location,
+                                  "\nHTTP Code:", response.status_code,
+                                  "\nReview API Headers:", response.headers,
+                                  "\nResponse Body:", response.content, "\nWait Time:", tries)
+                        try:
+                            with open(filename, 'wb') as file:
+                                file.write(response.content)
+                            with open(filename, "rb") as file:
+                                if file.read() and response.status_code == 200:
+                                    with zipfile.ZipFile(filename, 'r') as zip_file:
+                                        zip_file.extractall(temp_dir)
+                                        if tries >= 2:
+                                            if debug_level == 2:
+                                                print("Success on retry!\nContinuing\n", end="")
+                                else:
+                                    print("\nDownload Failed")
+                                    raise Exception("File Corrupted")
+                            # os.remove(filename)
+                        except Exception as FileCorruptError:
+                            if debug_level == 2:
+                                print("\nDeleting file..." + str(filename) + " " +
+                                      str(FileCorruptError) + "\nRetrying....", end="")
+                                print(f"Pausing for {wait_time} seconds before retrying...", end="")
+                            time.sleep(wait_time * tries)  # increase the wait with the number of retries
+                            if tries >= 3:
+                                break
+                        else:
+                            break
+                        finally:
+                            tries += 1
+                    if useProductionURL == "True":
+                        input_json_file = str(temp_dir + customerId + "_FieldNotices_" + json_filename)
+                    else:
+                        input_json_file = str(temp_dir + json_filename)
+                    if debug_level == 1 or debug_level == 2:
+                        print(f"\nReading file:{input_json_file}")
+                    if not os.path.isfile(input_json_file):
+                        print("File Not Found, Skipping.....")
+                    if os.path.isfile(input_json_file):
+                        with open(input_json_file, 'r', encoding='utf-8') as inputTarget:
+                            data = json.load(inputTarget)
+                            customerId = data['metadata']['customerId']
+                            totalCount = data['metadata']['totalCount']
+                            items = data['items']
+                        if outputFormat == 1 or outputFormat == 3:
+                            if totalCount > 0:
+                                print(f"Found Field Notices on Success Track{successTrackId}")
+                                for item in items:
+                                    assetId = str(item['assetId']).replace(",", "_")
+                                    hwInstanceId = str(item['hwInstanceId']).replace(",", " ")
+                                    assetName = str(item['assetName'])
+                                    productId = str(item['productId'])
+                                    serialNumber = str(item['serialNumber'])
+                                    successTrack = item['successTrack']
+                                    fieldNoticeId = str(item['fieldNoticeId'])
+                                    updated = str(item['updated']).replace(",", " ")
+                                    title = str(item['title']).replace(",", " ")
+                                    created = str(item['created'])
+                                    url = str(item['url']).replace(",", " ")
+                                    additionalNotes = str(item['additionalNotes']).replace(",", " ")
+                                    affectedStatus = str(item['affectedStatus'])
+                                    affectedReasons = item['affectedReason']
+                                    fieldNoticeDescription = str(item['fieldNoticeDescription']).replace(",", " ")
+                                    softwareRelease = str(item['softwareRelease'])
+                                    if not softwareRelease:
+                                        softwareRelease = "N/A"
+                                    ipAddress = str(item['ipAddress'])
+                                    if not ipAddress:
+                                        ipAddress = 'N/A'
+                                    for track in successTrack:
+                                        successTrackId = track['id']
+                                        useCases = track['useCases']
+                                        for useCase in useCases:
+                                            useCaseId = useCase
+                                            for reason in affectedReasons:
+                                                affectedReason = reason
+                                                if outputFormat == 1 or outputFormat == 3:
+                                                    with open(fieldNotices, 'a', encoding="utf-8", newline='') \
+                                                            as report_target:
+                                                        writer = csv.writer(report_target,
+                                                                            delimiter=' ',
+                                                                            quotechar=' ',
+                                                                            quoting=csv.QUOTE_MINIMAL)
+                                                        CSV_Data = (customerId + ',' +
+                                                                    successTrackId + ',' +
+                                                                    useCaseId + ',' +
+                                                                    assetName + ',' +
+                                                                    assetId + ',' +
+                                                                    hwInstanceId + ',' +
+                                                                    productId + ',' +
+                                                                    serialNumber + ',' +
+                                                                    fieldNoticeId + ',' +
+                                                                    updated + ',' +
+                                                                    title + ',' +
+                                                                    created + ',' +
+                                                                    url + ',' +
+                                                                    additionalNotes + ',' +
+                                                                    affectedStatus + ',' +
+                                                                    affectedReason + ',' +
+                                                                    fieldNoticeDescription + ',' +
+                                                                    softwareRelease + ',' +
+                                                                    ipAddress)
+                                                        writer.writerow(CSV_Data.split())
+                                if debug_level == 1 or debug_level == 2:
+                                    print("Success")
+                            else:
+                                print(f"No Field Notice Data Found For Success Track {successTrackId}")
+                        else:
+                            print(f"No Field Notice Data Found For Success Track {successTrackId}")
+                    else:
+                        print(f"No Field Notice Data Found For Success Track {successTrackId}"
+                              f"\nSkipping this record and continuing....")
+                    if outputFormat == 1 or outputFormat == 2:
+                        if totalCount > 0:
+                            print(f"Saving {json_output_dir}{customerId}_FieldNotices_{json_filename}")
+                            shutil.copy(input_json_file, json_output_dir)
+                        os.remove(input_json_file)
+            else:
+                print(f"No Field Notice Data Found For Success Track {successTrackId}"
+                      f"\nSkipping this record and continuing....")
+    print("\nSearch Completed!")
+    if debug_level == 1 or debug_level == 2:
+        now = datetime.now()
+        print('Stop DateTime:', now)
+    print("====================\n")
+
+
+# Function to request, download and process Priority Bugs report data from PX Cloud
+# This API provides many bug details including asset name and ID, serial number, IP address and other fields
+# CSV Naming Convention: Priority_Bugs.csv
+# JSON Naming Convention: {Customer ID}_Priority_Bugs_{UniqueReportID}.json
+def pxc_priority_bugs_reports():
+    print("******************************************************************")
+    print("***************** Running Priority Bugs report *******************")
+    print("******************************************************************")
+    print("Searching ......")
+    if debug_level == 1 or debug_level == 2:
+        now = datetime.now()
+        print('Start DateTime:', now)
+    if outputFormat == 1 or outputFormat == 3:
+        with open(priorityBugs, 'w', encoding="utf-8", newline='') as target:
+            CSV_Header = "customerId," \
+                         "successTrackId," \
+                         "useCaseId," \
+                         "assetName," \
+                         "assetId," \
+                         "serialNumber," \
+                         "ipAddress," \
+                         "softwareRelease," \
+                         "productId," \
+                         "bugId," \
+                         "bugTitle," \
+                         "description," \
+                         "url," \
+                         "bugSeverity," \
+                         "impact"
+            writeheader = csv.writer(target, delimiter=' ', quotechar=' ', quoting=csv.QUOTE_NONE)
+            writeheader.writerow(CSV_Header.split())
+    with open(customers, 'r') as cust_target:
+        custList = csv.DictReader(cust_target)
+        for row in custList:
+            customerId = row['customerId']
+            successTrackId = row['successTrackId']
+            customerName = row['customerName']
+            print(f"\nScanning priority Bugs for {customerName}")
+            if not successTrackId == "N/A":
+                token_time_check()
+                url = (pxc_url_customers + "/" + customerId + "/reports")
+                data_payload = json.dumps({"reportName": "prioritybugs", "successTrackId": successTrackId})
+                headers = {'Authorization': f'Bearer {token}'}
+                response = requests.request(
+                    "POST",
+                    url,
+                    headers=headers,
+                    data=data_payload,
+                    verify=True
+                )
+                if debug_level == 2:
+                    print("Report request URL:", url,
+                          "\nReport details:", data_payload,
+                          "\nHTTP Code:", response.status_code,
+                          "\nReview API Headers:", response.headers,
+                          "\nResponse Body:", response.content)
+                if response.text.__contains__("Customer admin has not provided access."):
+                    print(f"Customer admin has not provided access on Success Track {successTrackId}")
+                if not (response.text.__contains__("Customer admin has not provided access.")):
+                    try:
+                        if bool(response.headers["location"]) is True:
+                            pass
+                        else:
+                            raise KeyError
+                    except KeyError:
+                        print("\n!!!!!!!!\nException Thrown for", "Customer:",
+                              customerName, "on Success Track ", successTrackId,
+                              "Report Failed to Download\n")
+                        print("Report request URL:", url,
+                              "\nReport details:", data_payload,
+                              "\nHTTP Code:", response.status_code,
+                              "\nReview API Headers:", response.headers,
+                              "\nResponse Body:", response.content)
+                        while response.status_code >= 400:
+                            print(f"Pausing for {wait_time} seconds before re-request...")
+                            print("Resuming...")
+                            print("Making API Call again with the following...")
+                            print("URL: ", url)
+                            print("Data Payload: ", data_payload)
+                            response = requests.request(
+                                "POST",
+                                url,
+                                headers=headers,
+                                data=data_payload,
+                                verify=True
+                            )
+                            print("Report request URL:", url,
+                                  "\nReport details:", data_payload,
+                                  "\nHTTP Code:", response.status_code,
+                                  "\nReview API Headers:", response.headers,
+                                  "\nResponse Body:", response.content)
+                            print("Review for", "Customer:", customerName, "on Success Track ", successTrackId,
+                                  "Report Failed to Download\n")
+                    location = response.headers["location"]
+                    json_filename = (location.split('/')[-1] + '.json')
+                    tries = 1
+                    while True:
+                        time.sleep(tries)
+                        print("Scanning for data...")
+                        filename = (temp_dir + location.split('/')[-1] + '.zip')
+                        headers = {'Authorization': f'Bearer {token}'}
+                        response = requests.request("GET", location, headers=headers, data=payload)
+                        if debug_level == 2:
+                            print("\nLocation URL Returned:", location,
+                                  "\nHTTP Code:", response.status_code,
+                                  "\nReview API Headers:", response.headers,
+                                  "\nResponse Body:", response.content, "\nWait Time:", tries)
+                        try:
+                            with open(filename, 'wb') as file:
+                                file.write(response.content)
+                            with open(filename, "rb") as file:
+                                if file.read() and response.status_code == 200:
+                                    with zipfile.ZipFile(filename, 'r') as zip_file:
+                                        zip_file.extractall(temp_dir)
+                                        if tries >= 2:
+                                            if debug_level == 2:
+                                                print("Success on retry!\nContinuing\n", end="")
+                                else:
+                                    print("\nDownload Failed")
+                                    raise Exception("File Corrupted")
+                            # os.remove(filename)
+                        except Exception as FileCorruptError:
+                            if debug_level == 2:
+                                print("\nDeleting file..." + str(filename) + " " +
+                                      str(FileCorruptError) + "\nRetrying....", end="")
+                                print(f"Pausing for {wait_time} seconds before retrying...", end="")
+                            time.sleep(wait_time * tries)  # increase the wait with the number of retries
+                            if tries >= 3:
+                                break
+                        else:
+                            break
+                        finally:
+                            tries += 1
+                    if useProductionURL == "True":
+                        input_json_file = str(temp_dir + customerId + "_PriorityBugs_" + json_filename)
+                    else:
+                        input_json_file = str(temp_dir + json_filename)
+                    if debug_level == 1 or debug_level == 2:
+                        print(f"\nReading file:{input_json_file}")
+                    if not os.path.isfile(input_json_file):
+                        print("File Not Found, Skipping.....")
+                    if os.path.isfile(input_json_file):
+                        with open(input_json_file, 'r', encoding='utf-8') as inputTarget:
+                            data = json.load(inputTarget)
+                            customerId = data['metadata']['customerId']
+                            totalCount = data['metadata']['totalCount']
+                            items = data['items']
+                        if outputFormat == 1 or outputFormat == 3:
+                            if totalCount > 0:
+                                print(f"Found Priority Bugs on Success Track "
+                                      f"{successTrackId} for customer {customerName}")
+                                for item in items:
+                                    assetName = str(item['assetName'])
+                                    assetId = str(item['assetId']).replace(",", "_")
+                                    serialNumber = str(item['serialNumber'])
+                                    ipAddress = str(item['ipAddress'])
+                                    softwareRelease = str(item['softwareRelease'])
+                                    productId = str(item['productId'])
+                                    bugId = str(item['bugId']).replace(",", " ")
+                                    bugTitle = str(item['bugTitle']).replace(",", " ")
+                                    description = str(item['description']).replace(",", " ")
+                                    url = str(item['url']).replace(",", " ")
+                                    bugSeverity = str(item['bugSeverity']).replace(",", " ")
+                                    successTrack = item['successTrack']
+                                    impact = str(item['impact']).replace(",", " ")
+                                    for track in successTrack:
+                                        successTrackId = track['id']
+                                        useCases = track['useCases']
+                                        for useCase in useCases:
+                                            useCaseId = useCase
+                                            if outputFormat == 1 or outputFormat == 3:
+                                                with open(priorityBugs, 'a', encoding="utf-8", newline='') \
+                                                        as report_target:
+                                                    writer = csv.writer(report_target,
+                                                                        delimiter=' ',
+                                                                        quotechar=' ',
+                                                                        quoting=csv.QUOTE_MINIMAL)
+                                                    CSV_Data = (customerId + ',' +
+                                                                successTrackId + ',' +
+                                                                useCaseId + ',' +
+                                                                assetName + ',' +
+                                                                assetId + ',' +
+                                                                serialNumber + ',' +
+                                                                ipAddress + ',' +
+                                                                softwareRelease + ',' +
+                                                                productId + ',' +
+                                                                bugId + ',' +
+                                                                bugTitle + ',' +
+                                                                description + ',' +
+                                                                url + ',' +
+                                                                bugSeverity + ',' +
+                                                                impact)
+                                                    writer.writerow(CSV_Data.split())
+                                if debug_level == 1 or debug_level == 2:
+                                    print("Success")
+                            else:
+                                print(f"No Priority Bug Data Found For Success Track {successTrackId}")
+                    else:
+                        print(f"No Priority Bug Data Found For Success Track {successTrackId}"
+                              f"{successTrackId}\nSkipping this record and continuing....")
+                    if outputFormat == 1 or outputFormat == 2:
+                        if totalCount > 0:
+                            print(f"Saving {json_output_dir}{customerId}_PriorityBugs_{json_filename}")
+                            shutil.copy(input_json_file, json_output_dir)
+                        os.remove(input_json_file)
+            else:
+                print(f"No Priority Bug Data Found For Success Track {successTrackId}"
+                      f"{successTrackId}\nSkipping this record and continuing....")
+    print("\nSearch Completed!")
+    if debug_level == 1 or debug_level == 2:
+        now = datetime.now()
+        print('Stop DateTime:', now)
+    print("====================\n")
 
 
 # Function to get the Lifecycle data from PX Cloud
@@ -2476,7 +3210,6 @@ def pxc_licenses_reports():
 # CSV Naming Convention: Lifecycle.csv
 # JSON Naming Convention: {Customer ID}_Lifecycle.json
 def get_pxc_lifecycle():
-    token_time_check()
     print("******************************************************************")
     print("****************** Running Lifecycle Report **********************")
     print("******************************************************************")
@@ -2504,11 +3237,9 @@ def get_pxc_lifecycle():
             customerId = row['customerId']
             customerName = row['customerName']
             successTrackId = row['successTrackId']
-            if debug_level == 1 or debug_level == 2:
-                print("====================\n\n")
-                print("Lifecycle data for Customer:", customerName,
-                      "on Success Tracks:", successTrackId)
+            print(f"\nSanning lifecycle data for {customerName} on Success Track {successTrackId}")
             if not successTrackId == "N/A":
+                token_time_check()
                 items = (get_json_reply(url=(
                         pxc_url_customers + "/" +
                         customerId +
@@ -2517,8 +3248,8 @@ def get_pxc_lifecycle():
                 if outputFormat == 1 or outputFormat == 3:
                     if items is not None:
                         if len(items) > 0:
-                            print(f"\nFound Lifecycle Data on Success Track {successTrackId} for customer "
-                                  f"{customerName}")
+                            print(f"Found Lifecycle Data on Success Track {successTrackId} "
+                                  f"for customer {customerName}")
                             for item in items:
                                 successTrackName = item['successTrack'].replace(",", " ")
                                 successTracksId = item['id'].replace(",", " ")
@@ -2561,684 +3292,13 @@ def get_pxc_lifecycle():
                                 json.dump(items, json_file)
                             print(f"Saving {json_file.name}")
             else:
-                print(f"\nNo Data Found For Customer: {customerName} on success track:{successTrackId}"
+                print(f"\nNo Data Found For  {customerName} on Success Track{successTrackId}"
                       f"\nSkipping this record and continuing....")
     print("\nSearch Completed!")
     if debug_level == 1 or debug_level == 2:
         now = datetime.now()
         print('Stop DateTime:', now)
-    print("====================\n\n")
-
-
-# Function to request, download and process Security Advisories report data from PX Cloud
-# This API provides security vulnerability information including CVE and CVSS for devices associated with customer ID.
-# CSV Naming Convention: Security_Advisories.csv
-# JSON Naming Convention: {Customer ID}_SecurityAdvisories_{UniqueReportID}.json
-def pxc_security_advisories_reports():
-    token_time_check()
-    print("******************************************************************")
-    print("****************** Running Security Advisories *******************")
-    print("******************************************************************")
-    print("Searching ......\n", end="")
-    if debug_level == 1 or debug_level == 2:
-        now = datetime.now()
-        print('Start DateTime:', now)
-    if outputFormat == 1 or outputFormat == 3:
-        with open(securityAdvisories, 'w', encoding="utf-8", newline='') as target:
-            CSV_Header = "customerId," \
-                         "successTrackId," \
-                         "useCaseId," \
-                         "assetName," \
-                         "assetId," \
-                         "ipAddress," \
-                         "serialNumber," \
-                         "advisoryId," \
-                         "impact," \
-                         "cvss," \
-                         "version," \
-                         "cve," \
-                         "published," \
-                         "updated," \
-                         "advisory," \
-                         "summary," \
-                         "url," \
-                         "additionalNotes," \
-                         "affectedStatus," \
-                         "affectedReason," \
-                         "softwareRelease," \
-                         "productId"
-            writeheader = csv.writer(target, delimiter=' ', quotechar=' ', quoting=csv.QUOTE_NONE)
-            writeheader.writerow(CSV_Header.split())
-    with open(customers, 'r') as cust_target:
-        custList = csv.DictReader(cust_target)
-        for row in custList:
-            customerId = row['customerId']
-            successTrackId = row['successTrackId']
-            customerName = row['customerName']
-            if debug_level == 1 or debug_level == 2:
-                print("====================\n\n")
-                print("Security Advisories for Customer:", customerName,
-                      "on Success Tracks:", successTrackId)
-            if not successTrackId == "N/A":
-                url = (pxc_url_customers + "/" + customerId + "/reports")
-                data_payload = json.dumps({"reportName": "securityadvisories", "successTrackId": successTrackId})
-                headers = {'Authorization': f'Bearer {token}'}
-                response = requests.request(
-                    "POST",
-                    url,
-                    headers=headers,
-                    data=data_payload,
-                    verify=True
-                )
-                if debug_level == 2:
-                    print("Report request URL:", url,
-                          "\nReport details:", data_payload,
-                          "\nHTTP Code:", response.status_code,
-                          "\nReview API Headers:", response.headers,
-                          "\nResponse Body:", response.content)
-                try:
-                    if bool(response.headers["location"]) is True:
-                        pass
-                    else:
-                        raise KeyError
-                except KeyError:
-                    print("\n!!!!!!!!\nException Thrown for", "Customer:", customerName,
-                          "on Success Tracks:", successTrackId,
-                          "Report Failed to Download\n")
-                    print("Report request URL:", url,
-                          "\nReport details:", data_payload,
-                          "\nHTTP Code:", response.status_code,
-                          "\nReview API Headers:", response.headers,
-                          "\nResponse Body:", response.content)
-                    while response.status_code >= 400:
-                        print(f"Pausing for {wait_time} seconds before re-request...")
-                        time.sleep(wait_time)
-                        print("Resuming...")
-                        print("Making API Call again with the following...")
-                        print("URL: ", url)
-                        print("Data Payload: ", data_payload)
-                        response = requests.request(
-                            "POST",
-                            url,
-                            headers=headers,
-                            data=data_payload,
-                            verify=True
-                        )
-                        print("Report request URL:", url,
-                              "\nReport details:", data_payload,
-                              "\nHTTP Code:", response.status_code,
-                              "\nReview API Headers:", response.headers,
-                              "\nResponse Body:", response.content)
-                        print("Review for", "Customer:", customerName, "on Success Tracks:", successTrackId,
-                              "Report Failed to Download\n")
-                location = response.headers["location"]
-                json_filename = (location.split('/')[-1] + '.json')
-                tries = 1
-                print("")
-                while True:
-                    time.sleep(tries)
-                    print("Scanning for data...")
-                    filename = (temp_dir + location.split('/')[-1] + '.zip')
-                    headers = {'Authorization': f'Bearer {token}'}
-                    response = requests.request("GET", location, headers=headers, data=payload)
-                    if debug_level == 2:
-                        print("\nLocation URL Returned:", location,
-                              "\nHTTP Code:", response.status_code,
-                              "\nReview API Headers:", response.headers,
-                              "\nResponse Body:", response.content, "\nWait Time:", tries)
-                    try:
-                        with open(filename, 'wb') as file:
-                            file.write(response.content)
-                        with open(filename, "rb") as file:
-                            if file.read() and response.status_code == 200:
-                                with zipfile.ZipFile(filename, 'r') as zip_file:
-                                    zip_file.extractall(temp_dir)
-                                    if tries >= 2:
-                                        if debug_level == 2:
-                                            print("Success on retry!\nContinuing\n", end="")
-                            else:
-                                print("\nDownload Failed :", filename)
-                                raise Exception("File Corrupted")
-                        os.remove(filename)
-                    except Exception as FileCorruptError:
-                        if debug_level == 2:
-                            print("\nDeleting file..." + str(filename) + " " +
-                                  str(FileCorruptError) + "\nRetrying....", end="")
-                            print(f"Pausing for {wait_time} seconds before retrying...", end="")
-                        time.sleep(wait_time * tries)  # increase the wait with the number of retries
-                        if tries >= 20:
-                            break
-                    else:
-                        break
-                    finally:
-                        tries += 1
-                if useProductionURL == "True":
-                    input_json_file = str(temp_dir + customerId + "_SecurityAdvisories_" + json_filename)
-                else:
-                    input_json_file = str(temp_dir + json_filename)
-                if debug_level == 1 or debug_level == 2:
-                    print("\nReading file:", input_json_file)
-                with open(input_json_file, 'r', encoding='utf-8') as inputTarget:
-                    data = json.load(inputTarget)
-                    customerId = data['metadata']['customerId']
-                    totalCount = data['metadata']['totalCount']
-                    items = data['items']
-                if outputFormat == 1 or outputFormat == 3:
-                    if totalCount > 0:
-                        print(f"\nFound Security Advisories on Success Track {successTrackId} for customer "
-                              f"{customerName}")
-                        for item in items:
-                            assetName = str(item['assetName'])
-                            assetId = str(item['assetId']).replace(",", "_")
-                            ipAddress = str(item['ipAddress'])
-                            serialNumber = str(item['serialNumber'])
-                            successTrack = item['successTrack']
-                            advisoryId = str(item['advisoryId']).replace(",", " ")
-                            impact = str(item['impact']).replace(",", " ")
-                            cvss = str(item['cvss']).replace(",", " ")
-                            version = str(item['version'])
-                            cve = str(item['cve']).replace(",", " ")
-                            published = str(item['published']).replace(",", " ")
-                            updated = str(item['updated'])
-                            advisory = str(item['advisory']).replace(",", " ")
-                            summary = str(item['summary']).replace(",", " ")
-                            url = str(item['url']).replace(",", " ")
-                            additionalNotes = str(item['additionalNotes']).replace(",", " ")
-                            affectedStatus = str(item['affectedStatus'])
-                            affectedReasons = item['affectedReason']
-                            softwareRelease = str(item['softwareRelease'])
-                            productId = str(item['productId'])
-                            for track in successTrack:
-                                successTrackId = track['id']
-                                useCases = track['useCases']
-                                for useCase in useCases:
-                                    useCaseId = useCase
-                                    for reason in affectedReasons:
-                                        affectedReason = reason
-                                        with open(securityAdvisories, 'a', encoding="utf-8", newline='') \
-                                                as report_target:
-                                            writer = csv.writer(report_target,
-                                                                delimiter=' ',
-                                                                quotechar=' ',
-                                                                quoting=csv.QUOTE_MINIMAL)
-                                            CSV_Data = (customerId + ',' +
-                                                        successTrackId + ',' +
-                                                        useCaseId + ',' +
-                                                        assetName + ',' +
-                                                        assetId + ',' +
-                                                        ipAddress + ',' +
-                                                        serialNumber + ',' +
-                                                        advisoryId + ',' +
-                                                        impact + ',' +
-                                                        cvss + ',' +
-                                                        version + ',' +
-                                                        cve + ',' +
-                                                        published + ',' +
-                                                        updated + ',' +
-                                                        advisory + ',' +
-                                                        summary + ',' +
-                                                        url + ',' +
-                                                        additionalNotes + ',' +
-                                                        affectedStatus + ',' +
-                                                        affectedReason + ',' +
-                                                        softwareRelease + ',' +
-                                                        productId)
-                                            writer.writerow(CSV_Data.split())
-                        if debug_level == 1 or debug_level == 2:
-                            print("Success")
-                else:
-                    print("\nNo Security Advisories Data Found For Customer:", customerId,
-                          "\nSkipping this record and continuing....\n", end="")
-                if outputFormat == 1 or outputFormat == 2:
-                    if totalCount > 0:
-                        print(f"Saving {json_output_dir}{customerId}_SecurityAdvisories_{json_filename}")
-                        shutil.copy(input_json_file, json_output_dir)
-                    os.remove(input_json_file)
-            else:
-                print("\nNo Security Advisories Data Found For Customer:", customerName,
-                      "\nSkipping this record and continuing....")
-    print("\nSearch Completed!")
-    if debug_level == 1 or debug_level == 2:
-        now = datetime.now()
-        print('Stop DateTime:', now)
-    print("====================\n\n")
-
-
-# Function to request, download and process Field Notices report data from PX Cloud
-# This API gives details of all the notifications published and their associated details.
-# CSV Naming Convention: Field_Notices.csv
-# JSON Naming Convention: {Customer ID}_Field_Notices_{UniqueReportID}.json
-def pxc_field_notices_reports():
-    token_time_check()
-    print("******************************************************************")
-    print("******************** Running Field Notices ***********************")
-    print("******************************************************************")
-    print("Searching ......\n", end="")
-    if debug_level == 1 or debug_level == 2:
-        now = datetime.now()
-        print('Start DateTime:', now)
-    if outputFormat == 1 or outputFormat == 3:
-        with open(fieldNotices, 'w', encoding="utf-8", newline='') as target:
-            CSV_Header = "customerId," \
-                         "successTrackId," \
-                         "useCaseId," \
-                         "assetName," \
-                         "assetId," \
-                         "hwInstanceId," \
-                         "productId," \
-                         "serialNumber," \
-                         "fieldNoticeId," \
-                         "updated," \
-                         "title," \
-                         "created," \
-                         "url," \
-                         "additionalNotes," \
-                         "affectedStatus," \
-                         "affectedReason," \
-                         "fieldNoticeDescription," \
-                         "softwareRelease," \
-                         "ipAddress"
-            writeheader = csv.writer(target, delimiter=' ', quotechar=' ', quoting=csv.QUOTE_NONE)
-            writeheader.writerow(CSV_Header.split())
-    with open(customers, 'r') as cust_target:
-        custList = csv.DictReader(cust_target)
-        for row in custList:
-            customerId = row['customerId']
-            successTrackId = row['successTrackId']
-            customerName = row['customerName']
-            if debug_level == 1 or debug_level == 2:
-                print("====================\n\n")
-                print("Field Notices for Customer:", customerName,
-                      "on Success Tracks:", successTrackId)
-            if not successTrackId == "N/A":
-                url = (pxc_url_customers + "/" + customerId + "/reports")
-                data_payload = json.dumps({"reportName": "FieldNotices", "successTrackId": successTrackId})
-                headers = {'Authorization': f'Bearer {token}'}
-                response = requests.request(
-                    "POST",
-                    url,
-                    headers=headers,
-                    data=data_payload,
-                    verify=True
-                )
-                if debug_level == 2:
-                    print("Report request URL:", url,
-                          "\nReport details:", data_payload,
-                          "\nHTTP Code:", response.status_code,
-                          "\nReview API Headers:", response.headers,
-                          "\nResponse Body:", response.content)
-                try:
-                    if bool(response.headers["location"]) is True:
-                        pass
-                    else:
-                        raise KeyError
-                except KeyError:
-                    print("\n!!!!!!!!\nException Thrown for", "Customer:", customerName,
-                          "on Success Tracks:", successTrackId,
-                          "Report Failed to Download\n")
-                    print("Report request URL:", url,
-                          "\nReport details:", data_payload,
-                          "\nHTTP Code:", response.status_code,
-                          "\nReview API Headers:", response.headers,
-                          "\nResponse Body:", response.content)
-                    while response.status_code >= 400:
-                        print(f"Pausing for {wait_time} seconds before re-request...")
-                        time.sleep(wait_time)
-                        print("Resuming...")
-                        print("Making API Call again with the following...")
-                        print("URL: ", url)
-                        print("Data Payload: ", data_payload)
-                        response = requests.request(
-                            "POST",
-                            url,
-                            headers=headers,
-                            data=data_payload,
-                            verify=True
-                        )
-                        print("Report request URL:", url,
-                              "\nReport details:", data_payload,
-                              "\nHTTP Code:", response.status_code,
-                              "\nReview API Headers:", response.headers,
-                              "\nResponse Body:", response.content)
-                        print("Review for", "Customer:", customerName, "on Success Tracks:", successTrackId,
-                              "Report Failed to Download\n")
-                location = response.headers["location"]
-                json_filename = (location.split('/')[-1] + '.json')
-                tries = 1
-                print("")
-                while True:
-                    time.sleep(tries)
-                    print("Scanning for data...")
-                    filename = (temp_dir + location.split('/')[-1] + '.zip')
-                    headers = {'Authorization': f'Bearer {token}'}
-                    response = requests.request("GET", location, headers=headers, data=payload)
-                    if debug_level == 2:
-                        print("\nLocation URL Returned:", location,
-                              "\nHTTP Code:", response.status_code,
-                              "\nReview API Headers:", response.headers,
-                              "\nResponse Body:", response.content, "\nWait Time:", tries)
-                    try:
-                        with open(filename, 'wb') as file:
-                            file.write(response.content)
-                        with open(filename, "rb") as file:
-                            if file.read() and response.status_code == 200:
-                                with zipfile.ZipFile(filename, 'r') as zip_file:
-                                    zip_file.extractall(temp_dir)
-                                    if tries >= 2:
-                                        if debug_level == 2:
-                                            print("Success on retry!\nContinuing\n", end="")
-                            else:
-                                print("\nDownload Failed")
-                                raise Exception("File Corrupted")
-                        os.remove(filename)
-                    except Exception as FileCorruptError:
-                        if debug_level == 2:
-                            print("\nDeleting file..." + str(filename) + " " +
-                                  str(FileCorruptError) + "\nRetrying....", end="")
-                            print(f"Pausing for {wait_time} seconds before retrying...", end="")
-                        time.sleep(wait_time * tries)  # increase the wait with the number of retries
-                        if tries >= 20:
-                            break
-                    else:
-                        break
-                    finally:
-                        tries += 1
-                if useProductionURL == "True":
-                    input_json_file = str(temp_dir + customerId + "_FieldNotices_" + json_filename)
-                else:
-                    input_json_file = str(temp_dir + json_filename)
-                if debug_level == 1 or debug_level == 2:
-                    print("\nReading file:", input_json_file)
-                with open(input_json_file, 'r', encoding='utf-8') as inputTarget:
-                    data = json.load(inputTarget)
-                    customerId = data['metadata']['customerId']
-                    totalCount = data['metadata']['totalCount']
-                    items = data['items']
-                if outputFormat == 1 or outputFormat == 3:
-                    if totalCount > 0:
-                        print(f"\nFound Field Notices on Success Track {successTrackId} for customer {customerName}")
-                        for item in items:
-                            assetId = str(item['assetId']).replace(",", "_")
-                            hwInstanceId = str(item['hwInstanceId']).replace(",", " ")
-                            assetName = str(item['assetName'])
-                            productId = str(item['productId'])
-                            serialNumber = str(item['serialNumber'])
-                            successTrack = item['successTrack']
-                            fieldNoticeId = str(item['fieldNoticeId'])
-                            updated = str(item['updated']).replace(",", " ")
-                            title = str(item['title']).replace(",", " ")
-                            created = str(item['created'])
-                            url = str(item['url']).replace(",", " ")
-                            additionalNotes = str(item['additionalNotes']).replace(",", " ")
-                            affectedStatus = str(item['affectedStatus'])
-                            affectedReasons = item['affectedReason']
-                            fieldNoticeDescription = str(item['fieldNoticeDescription']).replace(",", " ")
-                            softwareRelease = str(item['softwareRelease'])
-                            if not softwareRelease:
-                                softwareRelease = "N/A"
-                            ipAddress = str(item['ipAddress'])
-                            if not ipAddress:
-                                ipAddress = 'N/A'
-                            for track in successTrack:
-                                successTrackId = track['id']
-                                useCases = track['useCases']
-                                for useCase in useCases:
-                                    useCaseId = useCase
-                                    for reason in affectedReasons:
-                                        affectedReason = reason
-                                        if outputFormat == 1 or outputFormat == 3:
-                                            with open(fieldNotices, 'a', encoding="utf-8", newline='') \
-                                                    as report_target:
-                                                writer = csv.writer(report_target,
-                                                                    delimiter=' ',
-                                                                    quotechar=' ',
-                                                                    quoting=csv.QUOTE_MINIMAL)
-                                                CSV_Data = (customerId + ',' +
-                                                            successTrackId + ',' +
-                                                            useCaseId + ',' +
-                                                            assetName + ',' +
-                                                            assetId + ',' +
-                                                            hwInstanceId + ',' +
-                                                            productId + ',' +
-                                                            serialNumber + ',' +
-                                                            fieldNoticeId + ',' +
-                                                            updated + ',' +
-                                                            title + ',' +
-                                                            created + ',' +
-                                                            url + ',' +
-                                                            additionalNotes + ',' +
-                                                            affectedStatus + ',' +
-                                                            affectedReason + ',' +
-                                                            fieldNoticeDescription + ',' +
-                                                            softwareRelease + ',' +
-                                                            ipAddress)
-                                                writer.writerow(CSV_Data.split())
-                        if debug_level == 1 or debug_level == 2:
-                            print("Success")
-                else:
-                    print("\nNo Field Notice Data Found For Customer:", customerName, "on success track id",
-                          successTrackId, "\nSkipping this record and continuing....\n", end="")
-                if outputFormat == 1 or outputFormat == 2:
-                    if totalCount > 0:
-                        print(f"Saving {json_output_dir}{customerId}_FieldNotices_{json_filename}")
-                        shutil.copy(input_json_file, json_output_dir)
-                    os.remove(input_json_file)
-            else:
-                print("\nNo Field Notice Data Found For Customer:", customerName,
-                      "\nSkipping this record and continuing....")
-    print("\nSearch Completed!")
-    if debug_level == 1 or debug_level == 2:
-        now = datetime.now()
-        print('Stop DateTime:', now)
-    print("====================\n\n")
-
-
-# Function to request, download and process Priority Bugs report data from PX Cloud
-# This API provides many bug details including asset name and ID, serial number, IP address and other fields
-# CSV Naming Convention: Priority_Bugs.csv
-# JSON Naming Convention: {Customer ID}_Priority_Bugs_{UniqueReportID}.json
-def pxc_priority_bugs_reports():
-    token_time_check()
-    print("******************************************************************")
-    print("***************** Running Priority Bugs report *******************")
-    print("******************************************************************")
-    print("Searching ......\n", end="")
-    if debug_level == 1 or debug_level == 2:
-        now = datetime.now()
-        print('Start DateTime:', now)
-    if outputFormat == 1 or outputFormat == 3:
-        with open(priorityBugs, 'w', encoding="utf-8", newline='') as target:
-            CSV_Header = "customerId," \
-                         "successTrackId," \
-                         "useCaseId," \
-                         "assetName," \
-                         "assetId," \
-                         "serialNumber," \
-                         "ipAddress," \
-                         "softwareRelease," \
-                         "productId," \
-                         "bugId," \
-                         "bugTitle," \
-                         "description," \
-                         "url," \
-                         "bugSeverity," \
-                         "impact"
-            writeheader = csv.writer(target, delimiter=' ', quotechar=' ', quoting=csv.QUOTE_NONE)
-            writeheader.writerow(CSV_Header.split())
-    with open(customers, 'r') as cust_target:
-        custList = csv.DictReader(cust_target)
-        for row in custList:
-            customerId = row['customerId']
-            successTrackId = row['successTrackId']
-            customerName = row['customerName']
-            if debug_level == 1 or debug_level == 2:
-                print("====================\n\n")
-                print("Priority Bugs for Customer:", customerName, "on Success Tracks:", successTrackId)
-            if not successTrackId == "N/A":
-                url = (pxc_url_customers + "/" + customerId + "/reports")
-                data_payload = json.dumps({"reportName": "prioritybugs", "successTrackId": successTrackId})
-                headers = {'Authorization': f'Bearer {token}'}
-                response = requests.request(
-                    "POST",
-                    url,
-                    headers=headers,
-                    data=data_payload,
-                    verify=True
-                )
-                if debug_level == 2:
-                    print("Report request URL:", url,
-                          "\nReport details:", data_payload,
-                          "\nHTTP Code:", response.status_code,
-                          "\nReview API Headers:", response.headers,
-                          "\nResponse Body:", response.content)
-                try:
-                    if bool(response.headers["location"]) is True:
-                        pass
-                    else:
-                        raise KeyError
-                except KeyError:
-                    print("\n!!!!!!!!\nException Thrown for", "Customer:",
-                          customerName, "on Success Tracks:", successTrackId,
-                          "Report Failed to Download\n")
-                    print("Report request URL:", url,
-                          "\nReport details:", data_payload,
-                          "\nHTTP Code:", response.status_code,
-                          "\nReview API Headers:", response.headers,
-                          "\nResponse Body:", response.content)
-                    while response.status_code >= 400:
-                        print(f"Pausing for {wait_time} seconds before re-request...")
-                        print("Resuming...")
-                        print("Making API Call again with the following...")
-                        print("URL: ", url)
-                        print("Data Payload: ", data_payload)
-                        response = requests.request(
-                            "POST",
-                            url,
-                            headers=headers,
-                            data=data_payload,
-                            verify=True
-                        )
-                        print("Report request URL:", url,
-                              "\nReport details:", data_payload,
-                              "\nHTTP Code:", response.status_code,
-                              "\nReview API Headers:", response.headers,
-                              "\nResponse Body:", response.content)
-                        print("Review for", "Customer:", customerName, "on Success Tracks:", successTrackId,
-                              "Report Failed to Download\n")
-                location = response.headers["location"]
-                json_filename = (location.split('/')[-1] + '.json')
-                tries = 1
-                print("")
-                while True:
-                    time.sleep(tries)
-                    print("Scanning for data...")
-                    filename = (temp_dir + location.split('/')[-1] + '.zip')
-                    headers = {'Authorization': f'Bearer {token}'}
-                    response = requests.request("GET", location, headers=headers, data=payload)
-                    if debug_level == 2:
-                        print("\nLocation URL Returned:", location,
-                              "\nHTTP Code:", response.status_code,
-                              "\nReview API Headers:", response.headers,
-                              "\nResponse Body:", response.content, "\nWait Time:", tries)
-                    try:
-                        with open(filename, 'wb') as file:
-                            file.write(response.content)
-                        with open(filename, "rb") as file:
-                            if file.read() and response.status_code == 200:
-                                with zipfile.ZipFile(filename, 'r') as zip_file:
-                                    zip_file.extractall(temp_dir)
-                                    if tries >= 2:
-                                        if debug_level == 2:
-                                            print("Success on retry!\nContinuing\n", end="")
-                            else:
-                                print("\nDownload Failed")
-                                raise Exception("File Corrupted")
-                        os.remove(filename)
-                    except Exception as FileCorruptError:
-                        if debug_level == 2:
-                            print("\nDeleting file..." + str(filename) + " " +
-                                  str(FileCorruptError) + "\nRetrying....", end="")
-                            print(f"Pausing for {wait_time} seconds before retrying...", end="")
-                        time.sleep(wait_time * tries)  # increase the wait with the number of retries
-                        if tries >= 20:
-                            break
-                    else:
-                        break
-                    finally:
-                        tries += 1
-                if useProductionURL == "True":
-                    input_json_file = str(temp_dir + customerId + "_PriorityBugs_" + json_filename)
-                else:
-                    input_json_file = str(temp_dir + json_filename)
-                if debug_level == 1 or debug_level == 2:
-                    print("\nReading file:", input_json_file)
-                with open(input_json_file, 'r', encoding='utf-8') as inputTarget:
-                    data = json.load(inputTarget)
-                    customerId = data['metadata']['customerId']
-                    totalCount = data['metadata']['totalCount']
-                    items = data['items']
-                if outputFormat == 1 or outputFormat == 3:
-                    if totalCount > 0:
-                        print(f"\nFound Priority Bugs on Success Track {successTrackId} for customer {customerName}")
-                        for item in items:
-                            assetName = str(item['assetName'])
-                            assetId = str(item['assetId']).replace(",", "_")
-                            serialNumber = str(item['serialNumber'])
-                            ipAddress = str(item['ipAddress'])
-                            softwareRelease = str(item['softwareRelease'])
-                            productId = str(item['productId'])
-                            bugId = str(item['bugId']).replace(",", " ")
-                            bugTitle = str(item['bugTitle']).replace(",", " ")
-                            description = str(item['description']).replace(",", " ")
-                            url = str(item['url']).replace(",", " ")
-                            bugSeverity = str(item['bugSeverity']).replace(",", " ")
-                            successTrack = item['successTrack']
-                            impact = str(item['impact']).replace(",", " ")
-                            for track in successTrack:
-                                successTrackId = track['id']
-                                useCases = track['useCases']
-                                for useCase in useCases:
-                                    useCaseId = useCase
-                                    if outputFormat == 1 or outputFormat == 3:
-                                        with open(priorityBugs, 'a', encoding="utf-8", newline='') as report_target:
-                                            writer = csv.writer(report_target,
-                                                                delimiter=' ',
-                                                                quotechar=' ',
-                                                                quoting=csv.QUOTE_MINIMAL)
-                                            CSV_Data = (customerId + ',' +
-                                                        successTrackId + ',' +
-                                                        useCaseId + ',' +
-                                                        assetName + ',' +
-                                                        assetId + ',' +
-                                                        serialNumber + ',' +
-                                                        ipAddress + ',' +
-                                                        softwareRelease + ',' +
-                                                        productId + ',' +
-                                                        bugId + ',' +
-                                                        bugTitle + ',' +
-                                                        description + ',' +
-                                                        url + ',' +
-                                                        bugSeverity + ',' +
-                                                        impact)
-                                            writer.writerow(CSV_Data.split())
-                        if debug_level == 1 or debug_level == 2:
-                            print("Success")
-                else:
-                    print("\nNo Priority Bug Data Found For Customer:", customerName, "on Success Tracks:",
-                          successTrackId, "\nSkipping this record and continuing....")
-                if outputFormat == 1 or outputFormat == 2:
-                    if totalCount > 0:
-                        print(f"Saving {json_output_dir}{customerId}_PriorityBugs_{json_filename}")
-                        shutil.copy(input_json_file, json_output_dir)
-                    os.remove(input_json_file)
-            else:
-                print("\nNo Priority Bug Data Found For Customer", customerName,
-                      "\nSkipping this record and continuing....")
-    print("\nSearch Completed!")
-    if debug_level == 1 or debug_level == 2:
-        now = datetime.now()
-        print('Stop DateTime:', now)
-    print("====================\n\n")
+    print("====================\n")
 
 
 # Functions to get the Optimal Software Version data from PX Cloud (currently only for Campus Network Success Tracks)
@@ -3246,7 +3306,6 @@ def pxc_priority_bugs_reports():
 # CSV Naming Convention: SoftwareGroup.csv
 # JSON Naming Convention: {customerName}_SoftwareGroups.json
 def pxc_software_groups():
-    token_time_check()
     print("******************************************************************")
     print("******************* Running Software Groups **********************")
     print("******************************************************************")
@@ -3280,9 +3339,8 @@ def pxc_software_groups():
             customerName = row['customerName']
             successTrackId = row['successTrackId']
             if not successTrackId == "N/A":
-                print(" ")
-                print("Scanning Customer:", customerName,
-                      "on Success Tracks:", successTrackId)
+                token_time_check()
+                print(f"\nScanning {customerName}")
                 url = (pxc_url_customers + "/" +
                        customerId +
                        pxc_url_software_groups +
@@ -3339,7 +3397,7 @@ def pxc_software_groups():
     if debug_level == 1 or debug_level == 2:
         now = datetime.now()
         print('Stop DateTime:', now)
-    print("====================\n\n")
+    print("====================\n")
 
 
 # This API returns Software Group suggestions, including detailed information about Cisco software release
@@ -3349,7 +3407,6 @@ def pxc_software_groups():
 #                        SoftwareGroup_Suggestions_Releases.csv
 # JSON Naming Convention: {Customer ID}_SoftwareGroup_Suggestions_{Success Track ID}_{Suggestion ID}.json
 def pxc_software_group_suggestions():
-    token_time_check()
     print("******************************************************************")
     print("************* Running Software Groups Suggestions ****************")
     print("******************************************************************")
@@ -3385,53 +3442,53 @@ def pxc_software_group_suggestions():
                          "releaseSummaryRelease"
             writeheader = csv.writer(target, delimiter=' ', quotechar=' ', quoting=csv.QUOTE_NONE)
             writeheader.writerow(CSV_Header.split())
-    with open(SWGroupSuggestionSummaries, 'w', encoding="utf-8", newline='') as target:
-        CSV_Header = "customerId," \
-                     "customerName," \
-                     "successTrackId," \
-                     "suggestionId," \
-                     "suggestionsInterval," \
-                     "suggestionUpdatedDate," \
-                     "suggestionSelectedDate," \
-                     "machineSuggestionId," \
-                     "expectedSoftwareGroupRisk," \
-                     "expectedSoftwareGroupRiskCategory," \
-                     "name," \
-                     "releaseDate," \
-                     "release," \
-                     "releaseNotesUrl," \
-                     "fieldNoticeSeverityFixedHigh," \
-                     "fieldNoticeSeverityFixedMedium," \
-                     "fieldNoticeSeverityFixedLow," \
-                     "fieldNoticeSeverityNewExposedHigh," \
-                     "fieldNoticeSeverityNewExposedMedium," \
-                     "fieldNoticeSeverityNewExposedLow," \
-                     "fieldNoticeSeverityExposedHigh," \
-                     "fieldNoticeSeverityExposedMedium," \
-                     "fieldNoticeSeverityExposedLow," \
-                     "advisoriesSeverityFixedHigh," \
-                     "advisoriesSeverityFixedMedium," \
-                     "advisoriesSeverityFixedLow," \
-                     "advisoriesSeverityNewExposedHigh," \
-                     "advisoriesSeverityNewExposedMedium," \
-                     "advisoriesSeverityNewExposedLow," \
-                     "advisoriesSeverityExposedHigh," \
-                     "advisoriesSeverityExposedMedium," \
-                     "advisoriesSeverityExposedLow," \
-                     "bugSeverityFixedHigh," \
-                     "bugSeverityFixedMedium," \
-                     "bugSeverityFixedLow," \
-                     "bugSeverityNewExposedHigh," \
-                     "bugSeverityNewExposedMedium," \
-                     "bugSeverityNewExposedLow," \
-                     "bugSeverityExposedHigh," \
-                     "bugSeverityExposedMedium," \
-                     "bugSeverityExposedLow," \
-                     "featuresCountActiveFeaturesCount," \
-                     "featuresCountAffectedFeaturesCount," \
-                     "featuresCountFixedFeaturesCount"
-        writeheader = csv.writer(target, delimiter=' ', quotechar=' ', quoting=csv.QUOTE_NONE)
-        writeheader.writerow(CSV_Header.split())
+        with open(SWGroupSuggestionSummaries, 'w', encoding="utf-8", newline='') as target:
+            CSV_Header = "customerId," \
+                         "customerName," \
+                         "successTrackId," \
+                         "suggestionId," \
+                         "suggestionsInterval," \
+                         "suggestionUpdatedDate," \
+                         "suggestionSelectedDate," \
+                         "machineSuggestionId," \
+                         "expectedSoftwareGroupRisk," \
+                         "expectedSoftwareGroupRiskCategory," \
+                         "name," \
+                         "releaseDate," \
+                         "release," \
+                         "releaseNotesUrl," \
+                         "fieldNoticeSeverityFixedHigh," \
+                         "fieldNoticeSeverityFixedMedium," \
+                         "fieldNoticeSeverityFixedLow," \
+                         "fieldNoticeSeverityNewExposedHigh," \
+                         "fieldNoticeSeverityNewExposedMedium," \
+                         "fieldNoticeSeverityNewExposedLow," \
+                         "fieldNoticeSeverityExposedHigh," \
+                         "fieldNoticeSeverityExposedMedium," \
+                         "fieldNoticeSeverityExposedLow," \
+                         "advisoriesSeverityFixedHigh," \
+                         "advisoriesSeverityFixedMedium," \
+                         "advisoriesSeverityFixedLow," \
+                         "advisoriesSeverityNewExposedHigh," \
+                         "advisoriesSeverityNewExposedMedium," \
+                         "advisoriesSeverityNewExposedLow," \
+                         "advisoriesSeverityExposedHigh," \
+                         "advisoriesSeverityExposedMedium," \
+                         "advisoriesSeverityExposedLow," \
+                         "bugSeverityFixedHigh," \
+                         "bugSeverityFixedMedium," \
+                         "bugSeverityFixedLow," \
+                         "bugSeverityNewExposedHigh," \
+                         "bugSeverityNewExposedMedium," \
+                         "bugSeverityNewExposedLow," \
+                         "bugSeverityExposedHigh," \
+                         "bugSeverityExposedMedium," \
+                         "bugSeverityExposedLow," \
+                         "featuresCountActiveFeaturesCount," \
+                         "featuresCountAffectedFeaturesCount," \
+                         "featuresCountFixedFeaturesCount"
+            writeheader = csv.writer(target, delimiter=' ', quotechar=' ', quoting=csv.QUOTE_NONE)
+            writeheader.writerow(CSV_Header.split())
     with open(SWGroups, 'r') as target:
         csvreader = csv.DictReader(target)
         for row in csvreader:
@@ -3440,8 +3497,8 @@ def pxc_software_group_suggestions():
             successTrackId = row['successTrackId']
             suggestionId = row['suggestionId']
             if not successTrackId == "N/A":
-                print(" ")
-                print(f"Found Software Group Suggestion ID {suggestionId} for {customerName}")
+                token_time_check()
+                print(f"\nFound Software Group Suggestion for {customerName}")
                 url = (pxc_url_customers + "/" +
                        customerId +
                        pxc_url_software_group_suggestions +
@@ -3474,6 +3531,7 @@ def pxc_software_group_suggestions():
                             with open(json_output_dir + customerName + "_SoftwareGroup_Suggestions_" + successTrackId
                                       + "_" + suggestionId + ".json", 'w') as json_file:
                                 json.dump(jsonDump, json_file)
+                            print(f"Saving {json_file.name}")
                 try:
                     softwareGroupRiskTrend = (get_json_reply(url, tag="softwareGroupRiskTrend"))
                 except Exception as Error:
@@ -3750,19 +3808,17 @@ def pxc_software_group_suggestions():
                                         featuresCountFixedFeaturesCount
                                         )
                             writer.writerow(CSV_Data.split())
-                print(f"Saving {json_file.name}")
     print("\nSearch Completed!")
     if debug_level == 1 or debug_level == 2:
         now = datetime.now()
         print('Stop DateTime:', now)
-    print("====================\n\n")
+    print("====================\n")
 
 
 # This API returns information about assets in the Software Group based on the customerID and softwareGroupId provided.
 # CSV Naming Convention: SoftwareGroup_Suggestions_Assets.csv
 # JSON Naming Convention: {Customer ID}_SoftwareGroup_Suggestion_Assets_{Software Group ID}.json
 def pxc_software_group_suggestions_assets():
-    token_time_check()
     print("******************************************************************")
     print("*********** Running Software Groups Suggestions Assets ***********")
     print("******************************************************************")
@@ -3792,8 +3848,8 @@ def pxc_software_group_suggestions_assets():
             successTrackId = row['successTrackId']
             softwareGroupId = row['softwareGroupId']
             if not successTrackId == "N/A":
-                print(" ")
-                print(f"Found Software Group ID {softwareGroupId} Suggestion Asset for {customerName}")
+                token_time_check()
+                print(f"\nFound Software Group ID {softwareGroupId} Suggestion Asset for {customerName}")
                 url = (pxc_url_customers + "/" +
                        customerId +
                        pxc_url_software_group_suggestions_assets +
@@ -3838,12 +3894,11 @@ def pxc_software_group_suggestions_assets():
                                             softwareType + ',' +
                                             currentRelease)
                                 writer.writerow(CSV_Data.split())
-
     print("\nSearch Completed!")
     if debug_level == 1 or debug_level == 2:
         now = datetime.now()
         print('Stop DateTime:', now)
-    print("====================\n\n")
+    print("====================\n")
 
 
 # This API returns information on bugs, including ID, description, and affected software releases.
@@ -3851,7 +3906,6 @@ def pxc_software_group_suggestions_assets():
 # JSON Naming Convention:
 # {CustomerName}_SoftwareGroup_Suggestions_Bug_Lists_{Machine Suggestion ID}_Page_{page}_of_{total}.json
 def pxc_software_group_suggestions_bug_list():
-    token_time_check()
     print("******************************************************************")
     print("********* Running Software Groups Suggestions Bug List ***********")
     print("******************************************************************")
@@ -3882,8 +3936,8 @@ def pxc_software_group_suggestions_bug_list():
             machineSuggestionId = row['machineSuggestionId']
             headers = {'Authorization': f'Bearer {token}'}
             if not successTrackId == "N/A":
-                print(" ")
-                print(f"Found Software Group Suggestions Bug List for {customerName} "
+                token_time_check()
+                print(f"\nFound Software Group Suggestions Bug List for {customerName} "
                       f"with machine suggestion ID of {machineSuggestionId}")
                 url = (pxc_url_customers + "/" +
                        customerId +
@@ -3959,7 +4013,7 @@ def pxc_software_group_suggestions_bug_list():
     if debug_level == 1 or debug_level == 2:
         now = datetime.now()
         print('Stop DateTime:', now)
-    print("====================\n\n")
+    print("====================\n")
 
 
 # This API returns field notice information, including ID number, title, and publish date.
@@ -3967,7 +4021,6 @@ def pxc_software_group_suggestions_bug_list():
 # JSON Naming Convention:
 # {Customer ID}_SoftwareGroup_Suggestions_Field_Notices_{Machine Suggestion ID}_Page_{page}_of_{total}.json
 def pxc_software_group_suggestions_field_notices():
-    token_time_check()
     print("******************************************************************")
     print("******* Running Software Groups Suggestions Field Notices ********")
     print("******************************************************************")
@@ -3996,11 +4049,10 @@ def pxc_software_group_suggestions_field_notices():
             successTrackId = row['successTrackId']
             machineSuggestionId = row['machineSuggestionId']
             headers = {'Authorization': f'Bearer {token}'}
-            if debug_level == 1 or debug_level == 2:
-                print("====================\n\n")
-                print("Software Group Suggestions Field Notices for Customer:", customerId,
-                      "on Success Tracks:", successTrackId)
+            print(f"Software Group Suggestions Field Notices for {customerName} "
+                  f"on Success Track {successTrackId}")
             if not successTrackId == "N/A":
+                token_time_check()
                 url = (pxc_url_customers + "/" +
                        customerId +
                        pxc_url_software_group_suggestions_field_notices +
@@ -4031,7 +4083,7 @@ def pxc_software_group_suggestions_field_notices():
                                "&machineSuggestionId=" + machineSuggestionId +
                                "&successTrackId=" + successTrackId)
                         items = (get_json_reply(url, tag="items"))
-                        print(f"Found Software Group Suggestions Field Notice for {customerName} "
+                        print(f"\nFound Software Group Suggestions Field Notice for {customerName} "
                               f"with machine suggestion ID of {machineSuggestionId}")
                         if outputFormat == 1 or outputFormat == 2:
                             if items is not None:
@@ -4078,7 +4130,7 @@ def pxc_software_group_suggestions_field_notices():
     if debug_level == 1 or debug_level == 2:
         now = datetime.now()
         print('Stop DateTime:', now)
-    print("====================\n\n")
+    print("====================\n")
 
 
 # This API returns software advisory information, including ID number, version number, and severity level.
@@ -4086,7 +4138,6 @@ def pxc_software_group_suggestions_field_notices():
 # JSON Naming Convention:
 # {Customer ID}_SoftwareGroup_Suggestions_Security_Advisories_{Machine Suggestion ID}_Page_{page}_of_{total}.json
 def pxc_software_group_suggestions_advisories():
-    token_time_check()
     print("******************************************************************")
     print("**** Running Software Groups Suggestions Security Advisories *****")
     print("******************************************************************")
@@ -4111,15 +4162,14 @@ def pxc_software_group_suggestions_advisories():
     with open(SWGroupSuggestionSummaries, 'r') as target:
         csvreader = csv.DictReader(target)
         for row in csvreader:
+            token_time_check()
             customerId = row['customerId']
             customerName = row['customerName']
             successTrackId = row['successTrackId']
             machineSuggestionId = row['machineSuggestionId']
             headers = {'Authorization': f'Bearer {token}'}
-            if debug_level == 1 or debug_level == 2:
-                print("====================\n\n")
-                print("Software Group Suggestions Security Advisories for Customer:", customerId,
-                      "on Success Tracks:", successTrackId)
+            print(f"Software Group Suggestions Security Advisories for {customerName}"
+                  f" on Success Track {successTrackId}")
             url = (pxc_url_customers + "/" +
                    customerId +
                    pxc_url_software_group_suggestions_security_advisories +
@@ -4201,7 +4251,7 @@ def pxc_software_group_suggestions_advisories():
     if debug_level == 1 or debug_level == 2:
         now = datetime.now()
         print('Stop DateTime:', now)
-    print("====================\n\n")
+    print("====================\n")
 
 
 # Functions to get the Automated Fault Management data from PX Cloud (currently only for Campus Network Success Tracks)
@@ -4209,7 +4259,6 @@ def pxc_software_group_suggestions_advisories():
 # CSV Naming Convention: Automated_Fault_Management_Faults.csv
 # JSON Naming Convention: {Customer ID}_Automated_Fault_Management_Faults_{Success Track ID}.json
 def pxc_automated_fault_management_faults():
-    token_time_check()
     print("******************************************************************")
     print("*********** Running Automated Fault Management Faults ************")
     print("******************************************************************")
@@ -4239,6 +4288,7 @@ def pxc_automated_fault_management_faults():
         custList = csv.DictReader(cust_target)
         for row in custList:
             if not row["successTrackId"] == "N/A":
+                token_time_check()
                 customerId = row['customerId']
                 customerName = row['customerName']
                 successTrackId = row['successTrackId']
@@ -4248,8 +4298,8 @@ def pxc_automated_fault_management_faults():
                        "?successTrackId=" + successTrackId +
                        "&days=30" +
                        "&max=" + max_items)
-                print("\nFound Automated Fault Management Faults for Customer:", row["customerName"],
-                      "on Success Tracks:", row["successTrackId"])
+                print(f"Found Automated Fault Management Faults for {customerName}"
+                      f" on Success Track {successTrackId}")
                 items = get_json_reply(url, tag="items")
                 if outputFormat == 1 or outputFormat == 2:
                     if items is not None:
@@ -4294,19 +4344,17 @@ def pxc_automated_fault_management_faults():
                                         occurences + ',' +
                                         ignoredAssets)
                             writer.writerow(CSV_Data.split())
-
     print("\nSearch Completed!")
     if debug_level == 1 or debug_level == 2:
         now = datetime.now()
         print('Stop DateTime:', now)
-    print("====================\n\n")
+    print("====================\n")
 
 
 # This API returns detailed information for a fault based on the fault signatureId and customerId provided.
 # CSV Naming Convention: Automated_Fault_Management_Fault_Summary.csv
 # JSON Naming Convention:{Customer ID}_Automated_Fault_Management_Fault_Summary_{Fault ID}_{Success Track ID}.json
 def pxc_automated_fault_management_fault_summary():
-    token_time_check()
     print("******************************************************************")
     print("******* Running Automated Fault Management Faults Summary ********")
     print("******************************************************************")
@@ -4334,13 +4382,13 @@ def pxc_automated_fault_management_fault_summary():
         custList = csv.DictReader(cust_target)
         for row in custList:
             if not row["successTrackId"] == "N/A":
+                token_time_check()
                 customerId = row['customerId']
                 customerName = row['customerName']
                 successTrackId = row['successTrackId']
                 faultId = row['faultId']
-                print(
-                    f"Automated Fault Management Fault Summary for {customerName} "
-                    f"on Success Tracks {successTrackId} with FaultId of {faultId}")
+                print(f"Automated Fault Management Fault Summary for {customerName}"
+                      f" on Success Tracks {successTrackId} with Fault ID of {faultId}")
                 url = (pxc_url_customers + "/" +
                        customerId +
                        pxc_url_automated_fault_management_faults +
@@ -4394,7 +4442,7 @@ def pxc_automated_fault_management_fault_summary():
     if debug_level == 1 or debug_level == 2:
         now = datetime.now()
         print('Stop DateTime:', now)
-    print("====================\n\n")
+    print("====================\n")
 
 
 # This API returns information about the customer assets affected by the fault, based on the signatureId and customerId.
@@ -4402,7 +4450,6 @@ def pxc_automated_fault_management_fault_summary():
 # JSON Naming Convention:
 # {Customer ID}_Automated_Fault_Management_Fault_Summary_Affected_Assets_{Fault ID}_{Success Track ID}.json
 def pxc_automated_fault_management_affected_assets():
-    token_time_check()
     print("******************************************************************")
     print("******* Running Automated Fault Management Affected Assets ******")
     print("******************************************************************")
@@ -4430,13 +4477,13 @@ def pxc_automated_fault_management_affected_assets():
         custList = csv.DictReader(cust_target)
         for row in custList:
             if not row["successTrackId"] == "N/A":
+                token_time_check()
                 customerId = row['customerId']
                 customerName = row['customerName']
                 successTrackId = row['successTrackId']
                 faultId = row['faultId']
-                print(
-                    f"Automated Fault Management Affected Assets for {customerName} "
-                    f"on Success Tracks {successTrackId} with FaultId of {faultId}")
+                print(f"Automated Fault Management Affected Assets for {customerName}"
+                      f" on Success Tracks {successTrackId} with FaultId of {faultId}")
                 url = (pxc_url_customers + "/" +
                        customerId +
                        pxc_url_automated_fault_management_faults +
@@ -4461,7 +4508,10 @@ def pxc_automated_fault_management_affected_assets():
                             assetName = str(item['assetName'].replace(",", " "))
                             productId = str(item['productId'].replace(",", " "))
                             caseNumber = str(item['caseNumber'])
-                            caseAction = str(item['caseAction'].replace(",", " "))
+                            if (item['caseAction']) is not None:
+                                caseAction = str(item['caseAction'].replace(",", " "))
+                            else:
+                                caseAction = "None"
                             occurrences = str(item['occurrences'])
                             firstOccurrence = str(item['firstOccurrence'].replace(",", " "))
                             lastOccurrence = str(item['lastOccurrence'].replace(",", " "))
@@ -4492,7 +4542,7 @@ def pxc_automated_fault_management_affected_assets():
     if debug_level == 1 or debug_level == 2:
         now = datetime.now()
         print('Stop DateTime:', now)
-    print("====================\n\n")
+    print("====================\n")
 
 
 # Functions to get the Compliance Violations data from PX Cloud (currently only for Campus Network Success Tracks)
@@ -4500,11 +4550,10 @@ def pxc_automated_fault_management_affected_assets():
 # CSV Naming Convention: Regulatory_Compliance_Violations.csv
 # JSON Naming Convention:{Customer ID}_Regulatory_Compliance_Violations_{Success Track ID}.json
 def pxc_compliance_violations():
-    token_time_check()
     print("******************************************************************")
     print("************** Running Compliance Violations Report **************")
     print("******************************************************************")
-    print("Searching ......\n", end="")
+    print("Searching ......", end="")
     if debug_level == 1 or debug_level == 2:
         now = datetime.now()
         print('Start DateTime:', now)
@@ -4529,16 +4578,12 @@ def pxc_compliance_violations():
     with open(customers, 'r') as cust_target:
         custList = csv.DictReader(cust_target)
         for row in custList:
-            if debug_level == 1 or debug_level == 2:
-                print("Compliance Violations for Customer:", row["customerId"],
-                      "on Success Tracks:", row["successTrackId"])
             customerId = row['customerId']
             customerName = row['customerName']
             successTrackId = row['successTrackId']
             headers = {'Authorization': f'Bearer {token}'}
             if not successTrackId == "N/A":
-                print(" ")
-                print(f"Found Customer:", row["customerName"])
+                token_time_check()
                 url = (pxc_url_customers + "/" +
                        customerId +
                        pxc_url_compliance_violations +
@@ -4549,12 +4594,15 @@ def pxc_compliance_violations():
                 reply = json.loads(response.text)
                 page = 0
                 try:
+                    print(f"\nFound Compliance Violations for {customerName} on Success Track {successTrackId}")
                     if response.status_code == 403:
                         print("Customer admin has not provided access.")
                     if response.status_code == 200:
                         totalCount = reply["totalCount"]
                         if totalCount == 0:
                             print("No Data Found .... Skipping")
+                        if totalCount > 0:
+                            print("Data Found ....\nRetreving Data.", end="")
                         pages = math.ceil(totalCount / int(max_items))
                         if debug_level == 1 or debug_level == 2:
                             print("\nTotal Pages:", pages,
@@ -4584,6 +4632,7 @@ def pxc_compliance_violations():
                             if outputFormat == 1 or outputFormat == 3:
                                 if items is not None:
                                     if len(items) > 0:
+                                        print(".", end="")
                                         for item in items:
                                             severity = item['severity'].replace(",", " ")
                                             severityId = item['severityId'].replace(",", " ")
@@ -4618,6 +4667,7 @@ def pxc_compliance_violations():
                                                             policyCategory)
                                                 writer.writerow(CSV_Data.split())
                             page += 1
+                        print(" Completed")
                 except KeyError:
                     print("No Data to process... Skipping.")
                     page -= 1
@@ -4626,7 +4676,7 @@ def pxc_compliance_violations():
     if debug_level == 1 or debug_level == 2:
         now = datetime.now()
         print('Stop DateTime:', now)
-    print("====================\n\n")
+    print("====================\n")
 
 
 # Function to get Assets violating compliance rule data from PX Cloud (currently only for Campus Network Success Tracks)
@@ -4635,11 +4685,10 @@ def pxc_compliance_violations():
 # JSON Naming Convention:
 # {Customer ID}_Assets_Violating_Compliance_Rule_{Success Track ID}_{File #}.json
 def pxc_assets_violating_compliance_rule():
-    token_time_check()
     print("******************************************************************")
     print("*********** Running Assets Violating Compliance Rules ************")
     print("******************************************************************")
-    print("Searching ......\n", end="")
+    print("Searching ......", end="")
     if debug_level == 1 or debug_level == 2:
         now = datetime.now()
         print('Start DateTime:', now)
@@ -4669,10 +4718,8 @@ def pxc_assets_violating_compliance_rule():
         custList = csv.DictReader(cust_target)
         fileNum = 0
         for row in custList:
+            token_time_check()
             fileNum += 1
-            if debug_level == 1 or debug_level == 2:
-                print("Assets Violating Compliance Rule for Customer:", row["customerId"],
-                      "on Success Tracks:", row["successTrackId"])
             customerId = row['customerId']
             customerName = row['customerName']
             successTrackId = row['successTrackId']
@@ -4681,6 +4728,7 @@ def pxc_assets_violating_compliance_rule():
             policyId = row['policyId']
             ruleId = row['ruleId']
             severity = row['severity']
+            print(f"\nAssets Violating Compliance Rule {ruleId} for {customerName} on Success Track {successTrackId}")
             url = (pxc_url_customers + "/" +
                    customerId +
                    pxc_url_compliance_violations_assets +
@@ -4692,9 +4740,6 @@ def pxc_assets_violating_compliance_rule():
                    "&successTrackId=" + successTrackId +
                    "&max=" + max_items)
             items = (get_json_reply(url, tag="items"))
-            print(" ")
-            print(f"Found Assets Violating Compliance Rules on Success Track {successTrackId} "
-                  f"for {customerName}")
             if outputFormat == 1 or outputFormat == 2:
                 if items is not None:
                     if len(items) > 0:
@@ -4708,7 +4753,9 @@ def pxc_assets_violating_compliance_rule():
                 try:
                     if items is not None:
                         if len(items) > 0:
+                            assetCount = 0
                             for item in items:
+                                assetCount += 1
                                 mgmtSystemHostname = item['mgmtSystemHostname'].replace(",", " ")
                                 ipAddress = str(item['ipAddress']).replace(",", " ")
                                 productFamily = str(item['productFamily']).replace(",", " ")
@@ -4749,6 +4796,8 @@ def pxc_assets_violating_compliance_rule():
                                                 ruleId + ',' +
                                                 scanStatus)
                                     writer.writerow(CSV_Data.split())
+
+                            print(f"Number of assets found {assetCount}")
                         else:
                             print("\nNo Data Found .... Skipping")
                             print("====================\n\n")
@@ -4759,7 +4808,7 @@ def pxc_assets_violating_compliance_rule():
     if debug_level == 1 or debug_level == 2:
         now = datetime.now()
         print('Stop DateTime:', now)
-    print("====================\n\n")
+    print("====================\n")
 
 
 # Function to get Assets violating compliance rule data from PX Cloud (currently only for Campus Network Success Tracks)
@@ -4768,7 +4817,6 @@ def pxc_assets_violating_compliance_rule():
 # JSON Naming Convention:
 # {Customer ID}_Policy_Rule_Details_{Success Track ID}_{Page #}.json
 def pxc_compliance_rule_details():
-    token_time_check()
     print("******************************************************************")
     print("************* Running Compliance Rule Detail Report **************")
     print("******************************************************************")
@@ -4791,10 +4839,8 @@ def pxc_compliance_rule_details():
         custList = csv.DictReader(cust_target)
         fileNum = 0
         for row in custList:
+            token_time_check()
             fileNum += 1
-            if debug_level == 1 or debug_level == 2:
-                print("Compliance Rule Detail for Customer:", row["customerId"],
-                      "on Success Tracks:", row["successTrackId"])
             customerId = row['customerId']
             customerName = row['customerName']
             successTrackId = row['successTrackId']
@@ -4803,6 +4849,7 @@ def pxc_compliance_rule_details():
             policyId = row['policyId']
             ruleId = row['ruleId']
             severity = row['severity']
+            print(f"\nCompliance Rule Detail for {customerName} on Success Track {successTrackId}")
             url = (pxc_url_customers + "/" +
                    customerId +
                    pxc_url_compliance_policy_rule_details +
@@ -4825,7 +4872,7 @@ def pxc_compliance_rule_details():
                     policyDescription = str(reply['policyDescription'])
                     ruleId = str(reply['ruleId'])
                     policyId = str(reply['policyId'])
-                    print(f"\nFound Policy {policyName}")
+                    print(f"Found Policy {policyName}")
                 if debug_level == 2:
                     print("URL Request:", url,
                           "\nHTTP Code:", response.status_code,
@@ -4860,7 +4907,7 @@ def pxc_compliance_rule_details():
     if debug_level == 1 or debug_level == 2:
         now = datetime.now()
         print('Stop DateTime:', now)
-    print("====================\n\n")
+    print("====================\n")
 
 
 # Functions to get the Compliance Suggestions data from PX Cloud (currently only for Campus Network Success Tracks)
@@ -4868,7 +4915,6 @@ def pxc_compliance_rule_details():
 # CSV Naming Convention: Compliance_Suggestions.csv
 # JSON Naming Convention:{Customer ID}_Compliance_Suggestions__{Success Track ID}_{Page #}.json
 def pxc_compliance_suggestions():
-    token_time_check()
     print("******************************************************************")
     print("***************** Running Compliance Suggestions *****************")
     print("******************************************************************")
@@ -4895,10 +4941,8 @@ def pxc_compliance_suggestions():
         custList = csv.DictReader(cust_target)
         fileNum = 0
         for row in custList:
+            token_time_check()
             fileNum += 1
-            if debug_level == 1 or debug_level == 2:
-                print("Compliance Suggestions for Customer :", row["customerId"],
-                      "on Success Tracks:", row["successTrackId"])
             customerId = row['customerId']
             customerName = row['customerName']
             successTrackId = row['successTrackId']
@@ -4906,6 +4950,7 @@ def pxc_compliance_suggestions():
             policyCategory = row['policyCategory']
             policyGroupId = row['policyGroupId']
             ruleId = row['ruleId']
+            print(f"\nCompliance Suggestions for Customer :{customerId} on Success Track {successTrackId}")
             headers = {'Authorization': f'Bearer {token}'}
             url = (pxc_url_customers + "/" +
                    customerId +
@@ -4917,7 +4962,7 @@ def pxc_compliance_suggestions():
                    "&ruleId=" + ruleId +
                    "&max=" + max_items)
             if fileNum == 1:
-                print(f"\nFound Compliance Suggestions on Success Track {successTrackId} "
+                print(f"Found Compliance Suggestions on Success Track {successTrackId} "
                       f"for {customerName}")
             response = requests.request("GET", url, headers=headers, data=payload, verify=True)
             reply = json.loads(response.text)
@@ -4961,6 +5006,7 @@ def pxc_compliance_suggestions():
                                         violationMessage = item['violationMessage'].replace(",", " ")
                                         suggestion = str(item['suggestion']).replace(",", " ")
                                         affectedAssetsCount = str(item['affectedAssetsCount'])
+                                        print(f"Violation: {violationMessage}")
                                         with open(RCCComplianceSuggestions, 'a', encoding="utf-8", newline='') \
                                                 as target:
                                             writer = csv.writer(target,
@@ -4989,7 +5035,7 @@ def pxc_compliance_suggestions():
     if debug_level == 1 or debug_level == 2:
         now = datetime.now()
         print('Stop DateTime:', now)
-    print("====================\n\n")
+    print("====================\n")
 
 
 # Function to get the Assets with Violations data from PX Cloud
@@ -4997,7 +5043,6 @@ def pxc_compliance_suggestions():
 # CSV Naming Convention: Regulatory_Compliance_Assets_With_Violations.csv
 # JSON Naming Convention: {Customer ID}_Assets_with_Violations_{successTrackId}.json
 def pxc_assets_with_violations():
-    token_time_check()
     print("******************************************************************")
     print("***************** Running Assets with Violations *****************")
     print("******************************************************************")
@@ -5033,11 +5078,8 @@ def pxc_assets_with_violations():
         fileNum = 0
         for row in custList:
             fileNum += 1
-            if debug_level == 1 or debug_level == 2:
-                print("====================\n\n")
-                print("Assets with Violations for Customer:", row["customerId"],
-                      "on Success Tracks:", row["successTrackId"])
             if not row["successTrackId"] == "N/A":
+                token_time_check()
                 customerName = row["customerName"]
                 customerId = row["customerId"]
                 successTrackId = row["successTrackId"]
@@ -5048,7 +5090,7 @@ def pxc_assets_with_violations():
                         pxc_url_compliance_assets_with_violations +
                         "?successTrackId=" + successTrackId)
                 if fileNum == 1:
-                    print(f"Found Customer", row["customerName"], "on Success Track", row["successTrackId"])
+                    print(f"Found Customer {customerName} on Success Track {successTrackId}")
                 items = (get_json_reply(url, tag="items"))
                 if outputFormat == 1 or outputFormat == 2:
                     if items is not None:
@@ -5076,6 +5118,8 @@ def pxc_assets_with_violations():
                                 severity = str(item['severity'])
                                 severityId = str(item['severityId'])
                                 scanStatus = str(item['scanStatus'])
+                                print(f"Violation of {ruleId} on asset: {assetId} for {customerName}"
+                                      f" on Success Track {successTrackId}")
                                 with open(RCCAssetsWithViolations, 'a', encoding="utf-8", newline='') as target:
                                     writer = csv.writer(target,
                                                         delimiter=' ',
@@ -5107,7 +5151,7 @@ def pxc_assets_with_violations():
     if debug_level == 1 or debug_level == 2:
         now = datetime.now()
         print('Stop DateTime:', now)
-    print("====================\n\n")
+    print("====================\n")
 
 
 # Function to get the Asset Violations data from PX Cloud
@@ -5115,7 +5159,6 @@ def pxc_assets_with_violations():
 # CSV Naming Convention: Regulatory_Compliance_Asset_Violations.csv
 # JSON Naming Convention: {Customer ID}_Asset_Violations_{sourceSystemId}_Page_##.json
 def pxc_asset_violations():
-    token_time_check()
     print("******************************************************************")
     print("************** Running Assets Violations Report ******************")
     print("******************************************************************")
@@ -5144,10 +5187,8 @@ def pxc_asset_violations():
         custList = csv.DictReader(cust_target)
         fileNum = 0
         for row in custList:
+            token_time_check()
             fileNum += 1
-            if debug_level == 1 or debug_level == 2:
-                print("Asset Violations for Customer:", row["customerId"],
-                      "on Success Tracks:", row["successTrackId"])
             customerId = row['customerId']
             customerName = row['customerName']
             sourceSystemId = row['sourceSystemId']
@@ -5161,10 +5202,8 @@ def pxc_asset_violations():
                    "&successTrackId=" + successTrackId +
                    "&max=" + max_items)
             if fileNum == 1:
-                print(f"Found Customer", row["customerName"], "on Success Track", row["successTrackId"])
+                print(f"\nFound {customerName} on Success Track {successTrackId}")
             items = (get_json_reply(url, tag="items"))
-            if not items:
-                print("No data found... Skipping")
             if outputFormat == 1 or outputFormat == 2:
                 if items is not None:
                     if len(items) > 0:
@@ -5188,6 +5227,8 @@ def pxc_asset_violations():
                                 policyDescription = str(item['policyDescription']).replace(",", " ")
                                 ruleTitle = str(item['ruleTitle']).replace(",", " ")
                                 ruleDescription = str(item['ruleDescription']).replace(",", " ")
+                                print(f"Violation of {regulatoryType} Regulations with asset: {assetId}"
+                                      f" on Success Track {successTrackId}")
                                 with open(RCCAssetViolations, 'a', encoding="utf-8", newline='') as target:
                                     writer = csv.writer(target,
                                                         delimiter=' ',
@@ -5207,9 +5248,6 @@ def pxc_asset_violations():
                                                 ruleTitle + ',' +
                                                 ruleDescription)
                                     writer.writerow(CSV_Data.split())
-                        else:
-                            print("\nNo Data Found .... Skipping")
-                            print("====================\n\n")
             except KeyError:
                 print("No Data to process... Skipping.")
                 pass
@@ -5217,7 +5255,7 @@ def pxc_asset_violations():
     if debug_level == 1 or debug_level == 2:
         now = datetime.now()
         print('Stop DateTime:', now)
-    print("====================\n\n")
+    print("====================\n")
 
 
 # Function to get the Obtained data from PX Cloud
@@ -5226,7 +5264,6 @@ def pxc_asset_violations():
 # CSV Naming Convention: Regulatory_Compliance_Obtained.csv
 # JSON Naming Convention: {Customer ID}_Obtained_{successTrackId}.json
 def pxc_obtained():
-    token_time_check()
     print("******************************************************************")
     print("********* Running Regulatory Compliance Obtained Report **********")
     print("******************************************************************")
@@ -5250,11 +5287,11 @@ def pxc_obtained():
             customerName = row['customerName']
             successTrackId = row['successTrackId']
             if debug_level == 1 or debug_level == 2:
-                print("====================\n\n")
-                print("Obtained data for Customer:", customerId,
-                      "on Success Tracks:", successTrackId)
+                print("====================\n")
+                print(f"Obtained data for {customerName} on Success Track {successTrackId}")
             if not successTrackId == "N/A":
-                print(f"Found Customer", customerName, "on Success Track", successTrackId)
+                token_time_check()
+                print(f"Found Customer {customerName} on Success Track {successTrackId}")
                 url = (pxc_url_customers + "/" +
                        customerId +
                        pxc_url_compliance_obtained +
@@ -5275,38 +5312,38 @@ def pxc_obtained():
                                   "\nHTTP Code:", response.status_code,
                                   "\nReview API Headers:", response.headers,
                                   "\nResponse Body:", response.content)
+                    if outputFormat == 1 or outputFormat == 2:
+                        if len(items) > 0:
+                            if items is not None:
+                                with open(json_output_dir + customerId + "_Obtained_" + successTrackId + ".json",
+                                          'w') as json_file:
+                                    json.dump(items, json_file)
+                                print(f"Saving {json_file.name}\n")
+                    if outputFormat == 1 or outputFormat == 3:
+                        if len(items) > 0:
+                            if items is not None:
+                                with open(RCCObtained, 'a', encoding="utf-8", newline='') as target:
+                                    writer = csv.writer(target,
+                                                        delimiter=' ',
+                                                        quotechar=' ',
+                                                        quoting=csv.QUOTE_MINIMAL)
+                                    CSV_Data = (customerId + ',' +
+                                                customerName + ',' +
+                                                successTrackId + ',' +
+                                                str(status) + ',' +
+                                                str(hasQualifiedAssets))
+                                    writer.writerow(CSV_Data.split())
                 except Exception as Error:
                     if response.text.__contains__("Customer admin has not provided access."):
                         if debug_level == 2:
                             print("\nResponse Body:", response.content)
                             print(Error)
                         print("Customer admin has not provided access....Skipping")
-                if outputFormat == 1 or outputFormat == 2:
-                    if len(items) > 0:
-                        if items is not None:
-                            with open(json_output_dir + customerId + "_Obtained_" + successTrackId + ".json",
-                                      'w') as json_file:
-                                json.dump(items, json_file)
-                            print(f"Saving {json_file.name}\n")
-                if outputFormat == 1 or outputFormat == 3:
-                    if len(items) > 0:
-                        if items is not None:
-                            with open(RCCObtained, 'a', encoding="utf-8", newline='') as target:
-                                writer = csv.writer(target,
-                                                    delimiter=' ',
-                                                    quotechar=' ',
-                                                    quoting=csv.QUOTE_MINIMAL)
-                                CSV_Data = (customerId + ',' +
-                                            customerName + ',' +
-                                            successTrackId + ',' +
-                                            str(status) + ',' +
-                                            str(hasQualifiedAssets))
-                                writer.writerow(CSV_Data.split())
     print("\nSearch Completed!")
     if debug_level == 1 or debug_level == 2:
         now = datetime.now()
         print('Stop DateTime:', now)
-    print("====================\n\n")
+    print("====================\n")
 
 
 # Functions to get the Crash Risk Assets data from PX Cloud (currently only for Campus Network Success Tracks)
@@ -5314,7 +5351,6 @@ def pxc_obtained():
 # CSV Naming Convention: Crash_Risk_Assets.csv
 # JSON Naming Convention:{Customer ID}_Crash_Risk_Assets_{Success Track ID}.json
 def pxc_crash_risk_assets():
-    token_time_check()
     print("******************************************************************")
     print("******* Running Risk Mitigation Checks on Crash Risk Assets ******")
     print("******************************************************************")
@@ -5348,7 +5384,8 @@ def pxc_crash_risk_assets():
             customerName = row['customerName']
             successTrackId = row['successTrackId']
             if not row["successTrackId"] == "N/A":
-                print(f"\nFound Customer", customerName, "on Success Track", successTrackId)
+                token_time_check()
+                print(f"\nFound {customerName} on Success Track{successTrackId}")
                 url = (pxc_url_customers + "/" +
                        customerId +
                        pxc_url_crash_risk_assets +
@@ -5409,7 +5446,7 @@ def pxc_crash_risk_assets():
     if debug_level == 1 or debug_level == 2:
         now = datetime.now()
         print('Stop DateTime:', now)
-    print("====================\n\n")
+    print("====================\n")
 
 
 # Functions to get the Crash Risk Factors data from PX Cloud (currently only for Campus Network Success Tracks)
@@ -5417,7 +5454,6 @@ def pxc_crash_risk_assets():
 # CSV Naming Convention: Crash_Risk_Factors.csv
 # JSON Naming Convention:{Customer ID}_Crash_Risk_Factors_{Success Track ID}_{Asset ID}.json
 def pxc_crash_risk_factors():
-    token_time_check()
     print("******************************************************************")
     print("****** Running Risk Mitigation Checks on Crash Risk Factors ******")
     print("******************************************************************")
@@ -5442,10 +5478,11 @@ def pxc_crash_risk_factors():
             customerId = row['customerId']
             customerName = row['customerName']
             successTrackId = row['successTrackId']
-            assetId = row["assetId"]
+            assetId = row["assetId"].replace("/", "-")
             assetUniqueId = row["assetUniqueId"]
             if not row["successTrackId"] == "N/A":
-                print(f"\nFound Customer", customerName, "on Success Track", successTrackId)
+                print(f"\nFound {customerName} with Asset {assetId}")
+                token_time_check()
                 url = (pxc_url_customers + "/" +
                        customerId +
                        pxc_url_crash_risk_assets + "/" + assetUniqueId +
@@ -5482,13 +5519,14 @@ def pxc_crash_risk_factors():
                                                 factor + ',' +
                                                 factorType)
                                     writer.writerow(CSV_Data.split())
+                            print(f"Customer {customerName} has Crash Risk Factor: {factor}")
             else:
                 print("\nNo Data Found .... Skipping")
     print("\nSearch Completed!")
     if debug_level == 1 or debug_level == 2:
         now = datetime.now()
         print('Stop DateTime:', now)
-    print("====================\n\n")
+    print("====================\n")
 
 
 # Functions to get the Similar Asset's data from PX Cloud (currently only for Campus Network Success Tracks)
@@ -5497,7 +5535,6 @@ def pxc_crash_risk_factors():
 # CSV Naming Convention: Similar_Assets.csv
 # JSON Naming Convention:{Customer ID}_Similar_Assets_{Success Track ID}_{Asset ID}_{Features}.json
 def pxc_similar_assets():
-    token_time_check()
     print("******************************************************************")
     print("******** Running Risk Mitigation Checks on Similar Assets ********")
     print("******************************************************************")
@@ -5533,7 +5570,7 @@ def pxc_similar_assets():
             assetId = row["assetId"]
             assetUniqueId = row["assetUniqueId"]
             if not row["successTrackId"] == "N/A":
-                print(f"\nFound Asset ID", assetId, "for Customer", customerName, "on Success Track", successTrackId)
+                token_time_check()
                 for feature in features:
                     url = (pxc_url_customers + "/" +
                            customerId +
@@ -5542,7 +5579,7 @@ def pxc_similar_assets():
                            pxc_url_crash_risk_similar_assets +
                            "?similarityCriteria=" + feature +
                            "&successTrackId=" + successTrackId + "&max=" + max_items)
-                    print(f"Scanning for Similar Assets for asset ID {assetId} for {customerName} with same {feature}")
+                    print(f"\nScanning Similar Assets for asset ID {assetId} for {customerName} with same {feature}")
                     items = get_json_reply(url, tag="items")
                     crashPredicted = str(get_json_reply(url, tag="crashPredicted"))
                     if outputFormat == 1 or outputFormat == 2:
@@ -5593,7 +5630,7 @@ def pxc_similar_assets():
     if debug_level == 1 or debug_level == 2:
         now = datetime.now()
         print('Stop DateTime:', now)
-    print("====================\n\n")
+    print("====================\n")
 
 
 # Functions to get the Assets Crashed in last 1d, 7d, 15d, 90d data from PX Cloud.
@@ -5603,7 +5640,6 @@ def pxc_similar_assets():
 # CSV Naming Convention: Crash_Risk_Assets_Last_Crashed.csv
 # JSON Naming Convention:{Customer ID}_Crash_Risk_Assets_Last_Crashed_In_{timePeriod}_Days_{Success Track ID}.json
 def pxc_crash_in_last():
-    token_time_check()
     print("******************************************************************")
     print("*** Running Risk Mitigation Checks on Assets last Crashed date ***")
     print("******************************************************************")
@@ -5640,7 +5676,8 @@ def pxc_crash_in_last():
             serialNumber = row['serialNumber']
             for daysLastCrashed in timePeriods:
                 if not row["successTrackId"] == "N/A":
-                    print(f"Scanning Serial Number {serialNumber} with a last crashed date within {daysLastCrashed} "
+                    token_time_check()
+                    print(f"\nScanning Serial Number {serialNumber} with a last crashed date within {daysLastCrashed} "
                           f"days for {customerName} ")
                     url = (pxc_url_customers + "/" +
                            customerId +
@@ -5702,7 +5739,7 @@ def pxc_crash_in_last():
     if debug_level == 1 or debug_level == 2:
         now = datetime.now()
         print('Stop DateTime:', now)
-    print("====================\n\n")
+    print("====================\n")
 
 
 # Functions to get the Asset Crash History from PX Cloud (currently only for Campus Network Success Tracks)
@@ -5711,7 +5748,6 @@ def pxc_crash_in_last():
 # CSV Naming Convention: Asset_Crash_History.csv
 # JSON Naming Convention:{Customer ID}_Asset_Crash_History_{Success Track ID}_{Base64 Asset ID}.json
 def pxc_asset_crash_history():
-    token_time_check()
     print("******************************************************************")
     print("***** Running Risk Mitigation Checks on Assets Crash History *****")
     print("******************************************************************")
@@ -5738,7 +5774,8 @@ def pxc_asset_crash_history():
             assetUniqueId = row["assetUniqueId"]
             assetId = row["assetId"]
             if not row["successTrackId"] == "N/A":
-                print(f"\nScanning Asset ID", assetId, "for Customer", customerName, "on Success Track", successTrackId)
+                token_time_check()
+                print(f"\nScanning Asset ID:{assetId} for {customerName} on Success Track{successTrackId}")
                 url = (pxc_url_customers + "/" +
                        customerId +
                        pxc_url_crash_risk + "/" +
@@ -5779,7 +5816,7 @@ def pxc_asset_crash_history():
     if debug_level == 1 or debug_level == 2:
         now = datetime.now()
         print('Stop DateTime:', now)
-    print("====================\n\n")
+    print("====================\n")
 
 
 '''
@@ -5804,10 +5841,12 @@ if log_to_file == "True" or log_to_file == "true":
 
 # Set URL to Sandbox if useProductionURL is false
 if useProductionURL == "False" or useProductionURL == "false":
+    useProductionURL = "False"
     pxc_url_base = urlProtocol + urlHost + urlLinkSandbox
     pxc_scope = "api.customer.assets.manage"
     environment = "Sandbox"
-else:
+elif useProductionURL == "True" or useProductionURL == "true":
+    useProductionURL = "True"
     pxc_url_base = urlProtocol + urlHost + urlLink
     pxc_scope = "api.authz.iam.manage"
     environment = "Production"
@@ -5827,7 +5866,7 @@ for x in range(0, testLoop):
     elif debug_level == 2:
         logLevel = "High"
     if log_to_file == "True" or log_to_file == "true":
-        print("Logging output to file PXCloud_##.log with debug level set to", logLevel, "for version ", codeVersion)
+        print(f"Logging output to file PXCloud_##.log with debug level set to {logLevel} for version {codeVersion}")
         sys.stdout = open(log_output_dir + 'PXCLoud_' + str(x + 1) + '.log', 'wt')
     startTime = time.time()
     print('Start Time:', datetime.now())
@@ -5862,7 +5901,7 @@ for x in range(0, testLoop):
     get_pxc_partner_offer_sessions()
 
     # call the function to get the PX Success Tracks List
-    get_pxc_succsstracks()
+    get_pxc_successtracks()
 
     # call the function to request and process the PX Cloud Assets Reports data
     pxc_assets_reports()  # requires CSV data from get_pxc_customers
@@ -5879,9 +5918,6 @@ for x in range(0, testLoop):
     # call the function to request and process the PX Cloud Licenses Reports data
     pxc_licenses_reports()  # requires CSV data from get_pxc_customers
 
-    # call the function to get the PX Cloud Lifecycle data
-    get_pxc_lifecycle()  # requires CSV data from get_pxc_customers
-
     # call the function to request and process the PX Cloud Security Advisories Reports data
     pxc_security_advisories_reports()  # requires CSV data from get_pxc_customers
 
@@ -5890,6 +5926,9 @@ for x in range(0, testLoop):
 
     # call the function to request and process the PX Cloud Priority Bugs Reports data
     pxc_priority_bugs_reports()  # requires CSV data from get_pxc_customers
+
+    # call the function to get the PX Cloud Lifecycle data
+    get_pxc_lifecycle()  # requires CSV data from get_pxc_customers
 
     # call the Optimal Software Version data from PX Cloud (currently only for Campus Network Success Tracks)
     pxc_software_groups()  # requires CSV data from get_pxc_customers
@@ -5909,7 +5948,6 @@ for x in range(0, testLoop):
     pxc_assets_violating_compliance_rule()  # requires CSV data from pxc_compliance_violations
     pxc_compliance_rule_details()  # requires CSV data from pxc_compliance_violations
     pxc_compliance_suggestions()  # requires CSV data from pxc_compliance_violations
-    token_time_check()
     pxc_assets_with_violations()  # requires CSV data from get_pxc_customers
     pxc_asset_violations()  # requires CSV data from pxc_assets_with_violations
     pxc_obtained()  # requires CSV data from get_pxc_customers
@@ -5929,8 +5967,8 @@ for x in range(0, testLoop):
     print("**************** Script Executed Successfully ********************")
     print("******************************************************************")
     stopTime = time.time()
-    print('Stop Time:', datetime.now(), '\n\n')
-    print("Total Time:", math.ceil(int(stopTime - startTime) / 60), "minutes")
+    print(f"Stop Time:{datetime.now()}\n\n")
+    print(f"Total Time:{math.ceil(int(stopTime - startTime) / 60)} minutes")
     if x + 1 == testLoop:
         # Clean exit
         if outputFormat == 2:
