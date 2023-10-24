@@ -1,1 +1,1 @@
-1. Resolved issue with contractValue key not being returned and crashing the script.
+1. Resolved issue with Lifecycle data not being processed
