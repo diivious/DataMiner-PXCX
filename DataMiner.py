@@ -243,6 +243,7 @@ log_output_dir = "outputlog/"
 temp_dir = "temp/"
 customers = (csv_output_dir + "Customers.csv")
 contracts = (csv_output_dir + "Contracts.csv")
+contractsWithCustomers = (csv_output_dir + "Contracts_With_Customer_Names.csv")
 contractDetails = (csv_output_dir + "Contract_Details.csv")
 partnerOffers = (csv_output_dir + "Partner_Offers.csv")
 partnerOfferSessions = (csv_output_dir + "Partner_Offer_Sessions.csv")
@@ -733,6 +734,97 @@ def get_pxc_contracts():
         print(f'Total Contracts: {totalNum}')
         print(f'Duplicated Contracts: {numOfDups}')
         print(f'Unique Contracts: {totalNum - numOfDups}')
+    if debug_level == 1 or debug_level == 2:
+        now = datetime.now()
+        print('Stop DateTime:', now)
+    print("\nSearch Completed!")
+    print("====================\n")
+
+
+# Function to get the Contract List from PX Cloud
+# This API will fetch list of partner contracts transacted with Cisco.
+# CSV Naming Convention: Contract.csv
+# JSON Naming Convention: Contracts_Page_{page}_of_{total}.json
+def get_pxc_contractswithcustomers():
+    print("******************************************************************")
+    print("******** Running Contracts With Customer Names Report ************")
+    print("******************************************************************")
+    print("Searching ......")
+    if debug_level == 1 or debug_level == 2:
+        now = datetime.now()
+        print('Start DateTime:', now)
+    totalCount = (get_json_reply(url=(pxc_url_contractswithcustomers + "?max=" + max_items), tag="totalCount"))
+    pages = math.ceil(totalCount / int(max_items))
+    page = 0
+    with open(contractsWithCustomers, 'w', encoding="utf-8", newline='') as target:
+        CSV_Header = "customerName," \
+                     "customerId," \
+                     "contractNumber," \
+                     "contractStatus," \
+                     "contractValue," \
+                     "customerGUName," \
+                     "successTrackIds," \
+                     "serviceLevel," \
+                     "coverageStartDate," \
+                     "coverageEndDate," \
+                     "onboardedstatus"
+        writer = csv.writer(target, delimiter=' ', quotechar=' ', quoting=csv.QUOTE_NONE)
+        writer.writerow(CSV_Header.split())
+        while page < pages:
+            token_time_check()
+            off_set = (page * int(max_items))
+            url = (pxc_url_contractswithcustomers +
+                   "?offset=" + str(off_set) +
+                   "&max=" + max_items
+                   )
+            items = (get_json_reply(url, tag="items"))
+            page += 1
+            for item in items:
+                customerDetails = (item['customerDetails'])
+                customerNameTemp = str(customerDetails[0]['customerName'])
+                customerName = str(customerNameTemp.replace(',', ' '))
+                customerId = str(customerDetails[0]['customerId'])
+                contractNumber = str(item['contractNumber'])
+                contractStatus = str(item['contractStatus'])
+                contractValue = str(item['contractValue'])
+                try:
+                    customerGUName = str(customerDetails[0]['customerGUName'].replace('?', ' '))
+                except KeyError:
+                    customerGUName = customerName
+                serviceLevel = str(item['serviceLevel'].replace(",", "|"))
+                coverageStartDate = str(item['coverageStartDate'])
+                coverageEndDate = str(item['coverageEndDate'])
+                try:
+                    onboardedstatus = str(item['onboardedStatus'])
+                except KeyError:
+                    onboardedstatus = str(item['onboardedstatus'])
+                try:
+                    successTrackIds = (item['successTrackIds'])
+                except KeyError:
+                    successTrackIds = ""
+                for successTrackId in successTrackIds:
+                    print(f"Found contract number {contractNumber} for {customerName}")
+                    CSV_Data = (customerName + ',' +
+                                customerId + ',' +
+                                contractNumber + ',' +
+                                contractStatus + ',' +
+                                contractValue + ',' +
+                                customerGUName + ',' +
+                                str(successTrackId) + ',' +
+                                serviceLevel + ',' +
+                                coverageStartDate + ',' +
+                                coverageEndDate + ',' +
+                                onboardedstatus)
+                    writer.writerow(CSV_Data.split())
+            if outputFormat == 1 or outputFormat == 2:
+                if items is not None:
+                    if len(items) > 0:
+                        with open(json_output_dir +
+                                  "ContractsWithNames" +
+                                  "_Page_" + str(page) +
+                                  "_of_" + str(pages) +
+                                  ".json", 'w') as json_file:
+                            print(f"Saving {json_file.name}")
     if debug_level == 1 or debug_level == 2:
         now = datetime.now()
         print('Stop DateTime:', now)
@@ -5838,7 +5930,6 @@ if log_to_file == "True" or log_to_file == "true":
         os.mkdir(log_output_dir)
     else:
         os.mkdir(log_output_dir)
-
 # Set URL to Sandbox if useProductionURL is false
 if useProductionURL == "False" or useProductionURL == "false":
     useProductionURL = "False"
@@ -5852,6 +5943,7 @@ elif useProductionURL == "True" or useProductionURL == "true":
     environment = "Production"
 pxc_url_customers = pxc_url_base + "customers"
 pxc_url_contracts = pxc_url_base + "contracts"
+pxc_url_contractswithcustomers = pxc_url_base + "contractsWithCustomers"
 pxc_url_contracts_details = pxc_url_base + "contract/details"
 pxc_url_partner_offers = pxc_url_base + "partnerOffers"
 pxc_url_partner_offers_sessions = pxc_url_base + "partnerOffersSessions"
@@ -5890,6 +5982,9 @@ for x in range(0, testLoop):
 
     # call the function to get the PX Cloud Contract List
     get_pxc_contracts()  # requires CSV data from get_pxc_customers
+
+    # call the function to get the PX Cloud Contract List with customers Names and ID's
+    get_pxc_contractswithcustomers()  # requires CSV data from get_pxc_customers
 
     # call the function to get the PX Cloud Contract Details
     get_pxc_contracts_details()  # requires CSV data from get_pxc_contracts

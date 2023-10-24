@@ -1,2 +1,2 @@
-1. Fixed a new bug introduce in last version to resolve an issue where a "/" was in the customers name and thus added to the filename for the JSON outputs causing the filename to be invalid.
+1. Added the endpoint for contracts with customers name as a new function.
 
