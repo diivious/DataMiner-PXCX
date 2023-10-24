@@ -1,2 +1,1 @@
-1. Cleaned up unused imports
-2. Resolve duplicates in the Contract Details function
+1. Added function to remove duplicate customer name and contract ID pairs from contract list and store results in unique_contracts.csv prior to running the contracts details function. The contracts details function will use the unique_contracts.csv as it's source.

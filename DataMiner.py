@@ -233,7 +233,7 @@ pxc_url_crash_risk_assets_last_crashed = pxc_url_crash_risk + "sCrashed"
 pxc_url_crash_risk_asset_crash_history = "/crashHistory"
 
 # Data File Variables
-codeVersion = str("1.0.0.10")
+codeVersion = str("1.0.0.11")
 configFile = "config.ini"
 csv_output_dir = "outputcsv/"
 json_output_dir = "outputjson/"
@@ -688,10 +688,38 @@ def get_pxc_contracts():
                                   "_of_" + str(pages) +
                                   ".json", 'w') as json_file:
                             print(f"Saving {json_file.name}")
-    print("\nSearch Completed!")
+
+    print("\nExtracting Unique Contract Entries")
+    # Remove duplicate contract IDs from contract list and store in unique_contracts.csv
+    with open(contracts, 'r') as infile, open(csv_output_dir + 'unique_contracts.csv', 'a', newline='') as outfile:
+        # this list will hold unique contracts numbers,
+        contractNumbers = []
+        numOfDups = 0
+        totalNum = 0
+        # read input file into a dictionary
+        results = csv.DictReader(infile)
+        writer = csv.writer(outfile)
+        # write column headers to output file
+        writer.writerow(['customerName', 'contractNumber'])
+        for result in results:
+            totalNum += 1
+            customerName = result.get('customerName')
+            contractNumber = result.get('contractNumber')
+            # if value already exists in the list, skip writing the whole row to output file
+            if contractNumber in contractNumbers:
+                numOfDups += 1
+                continue
+            writer.writerow([customerName, contractNumber])
+            # add the value to the list to be skipped subsequently
+            contractNumbers.append(contractNumber)
+        print("========== Summary ==========")
+        print(f'Total Contracts: {totalNum}')
+        print(f'Duplicated Contracts: {numOfDups}')
+        print(f'Unique Contracts: {totalNum - numOfDups}')
     if debug_level == 1 or debug_level == 2:
         now = datetime.now()
         print('Stop DateTime:', now)
+    print("\nSearch Completed!")
     print("====================\n\n")
 
 
@@ -725,7 +753,7 @@ def get_pxc_contracts_details():
                          "instanceNumber"
             writer = csv.writer(target, delimiter=' ', quotechar=' ', quoting=csv.QUOTE_NONE)
             writer.writerow(CSV_Header.split())
-    with open(contracts, 'r') as target:
+    with open(csv_output_dir + 'unique_contracts.csv', 'r') as target:
         contractList = csv.DictReader(target)
         for row in contractList:
             customerName = row["customerName"].replace(",", " ")
