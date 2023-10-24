@@ -235,7 +235,7 @@ pxc_url_crash_risk_assets_last_crashed = pxc_url_crash_risk + "sCrashed"
 pxc_url_crash_risk_asset_crash_history = "/crashHistory"
 
 # Data File Variables
-codeVersion = str("1.0.0.18")
+codeVersion = str("1.0.0.19")
 configFile = "config.ini"
 csv_output_dir = "outputcsv/"
 json_output_dir = "outputjson/"
@@ -818,7 +818,10 @@ def get_pxc_contractswithcustomers():
                 customerId = str(customerDetails[0]['customerId'])
                 contractNumber = str(item['contractNumber'])
                 contractStatus = str(item['contractStatus'])
-                contractValue = str(item['contractValue'])
+                try:
+                    contractValue = str(item['contractValue'])
+                except KeyError:
+                    contractValue = ""
                 try:
                     customerGUName = str(customerDetails[0]['customerGUName'].replace('?', ' '))
                 except KeyError:
