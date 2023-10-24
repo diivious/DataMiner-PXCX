@@ -817,11 +817,11 @@ def get_pxc_contracts_details():
                         if outputFormat == 1 or outputFormat == 2:
                             if items is not None:
                                 if len(items) > 0:
-                                    json_file = (json_output_dir + customerName +
+                                    json_file = (json_output_dir + customerName.replace('/', '-') +
                                                  "_Contract_Details_" + contractNumber +
                                                  "_Page_" + str(page + 1) +
                                                  "_of_" + str(pages) +
-                                                 ".json").replace('/', '-')
+                                                 ".json")
                                     if not os.path.isfile(json_file):
                                         with open(json_file, 'w') as fileTarget:
                                             json.dump(items, fileTarget)
