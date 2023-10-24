@@ -235,7 +235,7 @@ pxc_url_crash_risk_assets_last_crashed = pxc_url_crash_risk + "sCrashed"
 pxc_url_crash_risk_asset_crash_history = "/crashHistory"
 
 # Data File Variables
-codeVersion = str("1.0.0.12")
+codeVersion = str("1.0.0.15")
 configFile = "config.ini"
 csv_output_dir = "outputcsv/"
 json_output_dir = "outputjson/"
@@ -318,6 +318,20 @@ def token_time_check():
         print(f"Token time is :{tokenTime} minutes")
     if tokenTime > 110:
         get_pxc_token()
+
+
+def location_ready_status(location, headers):
+    while True:
+        print('Checking report ready status')
+        response = requests.get(location, headers=headers, allow_redirects=False)
+        response.raise_for_status()
+        if response.status_code == 303:
+            break
+        nextPoll = int(response.json().get('suggestedNextPollTimeInMins', 1))
+        print(f'API Requested {nextPoll} minute(s) for report to complete...')
+        time.sleep(nextPoll * 60)
+    print('Downloading Report...')
+    return location
 
 
 # Function to load configuration from config.ini and continue or create a template if not found and exit
@@ -1375,7 +1389,7 @@ def pxc_assets_reports():
             customerId = row['customerId']
             successTrackId = row['successTrackId']
             customerName = row['customerName']
-            print(f"\nScanning Asset data for {customerName}")
+            print(f"\nRequesting Asset data for {customerName}")
             if not successTrackId == "N/A":
                 token_time_check()
                 url = (pxc_url_customers + "/" + customerId + "/reports")
@@ -1433,6 +1447,7 @@ def pxc_assets_reports():
                             print("Review for", "Customer:", customerId, "on Success Track", successTrackId,
                                   "Report Failed to Download\n")
                     location = response.headers["location"]
+                    location_ready_status(location, headers)
                     json_filename = (location.split('/')[-1] + '.json')
                     tries = 1
                     while True:
@@ -1743,7 +1758,7 @@ def pxc_hardware_reports():
             customerId = row['customerId']
             successTrackId = row['successTrackId']
             customerName = row['customerName']
-            print(f"\nScanning hardware data for {customerName}")
+            print(f"\nRequesting hardware data for {customerName}")
             if not successTrackId == "N/A":
                 token_time_check()
                 url = (pxc_url_customers + "/" + customerId + "/reports")
@@ -1801,6 +1816,7 @@ def pxc_hardware_reports():
                             print(f"Review for  {customerName} on Success Track {successTrackId} "
                                   f"Report Failed to Download\n")
                     location = response.headers["location"]
+                    location_ready_status(location, headers)
                     json_filename = (location.split('/')[-1] + '.json')
                     tries = 1
                     while True:
@@ -1985,7 +2001,7 @@ def pxc_software_reports():
             customerId = row['customerId']
             successTrackId = row['successTrackId']
             customerName = row['customerName']
-            print(f"\nScanning software data for {customerName}")
+            print(f"\nRequesting software data for {customerName}")
             if not successTrackId == "N/A":
                 token_time_check()
                 url = (pxc_url_customers + "/" + customerId + "/reports")
@@ -2043,6 +2059,7 @@ def pxc_software_reports():
                             print("Review for", "Customer:", customerName, "on Success Track ", successTrackId,
                                   "Report Failed to Download\n")
                     location = response.headers["location"]
+                    location_ready_status(location, headers)
                     json_filename = (location.split('/')[-1] + '.json')
                     tries = 1
                     while True:
@@ -2203,7 +2220,7 @@ def pxc_purchased_licenses_reports():
             customerId = row['customerId']
             successTrackId = row['successTrackId']
             customerName = row['customerName']
-            print(f"\nScanning purchased Licenses data for {customerName}")
+            print(f"\nRequesting purchased Licenses data for {customerName}")
             if not successTrackId == "N/A":
                 token_time_check()
                 url = (pxc_url_customers + "/" + customerId + "/reports")
@@ -2261,6 +2278,7 @@ def pxc_purchased_licenses_reports():
                             print("Review for", "Customer:", customerId, "on Success Track ", successTrackId,
                                   "Report Failed to Download\n")
                     location = response.headers["location"]
+                    location_ready_status(location, headers)
                     json_filename = (location.split('/')[-1] + '.json')
                     tries = 1
                     while True:
@@ -2414,7 +2432,7 @@ def pxc_licenses_reports():
             customerId = row['customerId']
             successTrackId = row['successTrackId']
             customerName = row['customerName']
-            print(f"\nScanning license data for {customerName}")
+            print(f"\nRequesting license data for {customerName}")
             if not successTrackId == "N/A":
                 token_time_check()
                 url = (pxc_url_customers + "/" + customerId + "/reports")
@@ -2472,6 +2490,7 @@ def pxc_licenses_reports():
                             print("Review for", "Customer:", customerName, "on Success Track ", successTrackId,
                                   "Report Failed to Download\n")
                     location = response.headers["location"]
+                    location_ready_status(location, headers)
                     json_filename = (location.split('/')[-1] + '.json')
                     tries = 1
                     while True:
@@ -2654,7 +2673,7 @@ def pxc_security_advisories_reports():
             customerId = row['customerId']
             successTrackId = row['successTrackId']
             customerName = row['customerName']
-            print(f"\nScanning security Advisories for {customerName}")
+            print(f"\nRequesting security Advisories for {customerName}")
             if not successTrackId == "N/A":
                 token_time_check()
                 url = (pxc_url_customers + "/" + customerId + "/reports")
@@ -2712,6 +2731,7 @@ def pxc_security_advisories_reports():
                             print("Review for ", customerName, "on Success Track ", successTrackId,
                                   "Report Failed to Download\n")
                     location = response.headers["location"]
+                    location_ready_status(location, headers)
                     json_filename = (location.split('/')[-1] + '.json')
                     tries = 1
                     while True:
@@ -2888,7 +2908,7 @@ def pxc_field_notices_reports():
             customerId = row['customerId']
             successTrackId = row['successTrackId']
             customerName = row['customerName']
-            print(f"\nScanning Field Notices for {customerName}")
+            print(f"\nRequesting Field Notices for {customerName}")
             if not successTrackId == "N/A":
                 token_time_check()
                 url = (pxc_url_customers + "/" + customerId + "/reports")
@@ -2946,6 +2966,7 @@ def pxc_field_notices_reports():
                             print("Review for", "Customer:", customerName, "on Success Track ", successTrackId,
                                   "Report Failed to Download\n")
                     location = response.headers["location"]
+                    location_ready_status(location, headers)
                     json_filename = (location.split('/')[-1] + '.json')
                     tries = 1
                     while True:
@@ -3119,7 +3140,7 @@ def pxc_priority_bugs_reports():
             customerId = row['customerId']
             successTrackId = row['successTrackId']
             customerName = row['customerName']
-            print(f"\nScanning priority Bugs for {customerName}")
+            print(f"\nRequesting priority Bugs for {customerName}")
             if not successTrackId == "N/A":
                 token_time_check()
                 url = (pxc_url_customers + "/" + customerId + "/reports")
@@ -3176,6 +3197,7 @@ def pxc_priority_bugs_reports():
                             print("Review for", "Customer:", customerName, "on Success Track ", successTrackId,
                                   "Report Failed to Download\n")
                     location = response.headers["location"]
+                    location_ready_status(location, headers)
                     json_filename = (location.split('/')[-1] + '.json')
                     tries = 1
                     while True:
