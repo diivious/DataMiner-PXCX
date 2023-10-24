@@ -723,6 +723,7 @@ def get_pxc_contracts():
                                   "_Page_" + str(page) +
                                   "_of_" + str(pages) +
                                   ".json", 'w') as json_file:
+                            json.dump(items, json_file)
                             print(f"Saving {json_file.name}")
 
     print("\nExtracting Unique Contract Entries")
@@ -842,6 +843,7 @@ def get_pxc_contractswithcustomers():
                                   "_Page_" + str(page) +
                                   "_of_" + str(pages) +
                                   ".json", 'w') as json_file:
+                            json.dump(items, json_file)
                             print(f"Saving {json_file.name}")
     if debug_level == 1 or debug_level == 2:
         now = datetime.now()
@@ -5068,7 +5070,7 @@ def pxc_compliance_suggestions():
             policyCategory = row['policyCategory']
             policyGroupId = row['policyGroupId']
             ruleId = row['ruleId']
-            print(f"\nCompliance Suggestions for Customer :{customerId} on Success Track {successTrackId}")
+            print(f"\nCompliance Suggestions for Customer :{customerName} on Success Track {successTrackId}")
             headers = {'Authorization': f'Bearer {token}'}
             url = (pxc_url_customers + "/" +
                    customerId +
@@ -5345,7 +5347,7 @@ def pxc_asset_violations():
                                 policyDescription = str(item['policyDescription']).replace(",", " ")
                                 ruleTitle = str(item['ruleTitle']).replace(",", " ")
                                 ruleDescription = str(item['ruleDescription']).replace(",", " ")
-                                print(f"Violation of {regulatoryType} Regulations with asset: {assetId}"
+                                print(f"{severity} Violation of {regulatoryType} Regulations with asset: {assetId}"
                                       f" on Success Track {successTrackId}")
                                 with open(RCCAssetViolations, 'a', encoding="utf-8", newline='') as target:
                                     writer = csv.writer(target,
