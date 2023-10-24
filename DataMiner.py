@@ -235,7 +235,7 @@ pxc_url_crash_risk_assets_last_crashed = pxc_url_crash_risk + "sCrashed"
 pxc_url_crash_risk_asset_crash_history = "/crashHistory"
 
 # Data File Variables
-codeVersion = str("1.0.0.19")
+codeVersion = str("1.0.0.20")
 configFile = "config.ini"
 csv_output_dir = "outputcsv/"
 json_output_dir = "outputjson/"
@@ -931,9 +931,9 @@ def get_pxc_contracts_details():
                               "\n====================")
                     page = 0
                     if totalCount > 0:
-                        print(f"Found details on contract number {contractNumber}")
+                        print(f"Found contract number {contractNumber}")
                     if totalCount < 1:
-                        print(f"No details found on contract number {contractNumber}")
+                        print(f"No details found for contract number {contractNumber}")
                     while page < pages:
                         off_set = (page * int(max_items))
                         url = (pxc_url_contracts_details +
@@ -3346,7 +3346,6 @@ def pxc_priority_bugs_reports():
         now = datetime.now()
         print('Stop DateTime:', now)
     print("====================\n")
-    exit()
 
 
 # Function to get the Lifecycle data from PX Cloud
@@ -4081,8 +4080,7 @@ def pxc_software_group_suggestions_bug_list():
             headers = {'Authorization': f'Bearer {token}'}
             if not successTrackId == "N/A":
                 token_time_check()
-                print(f"\nFound Software Group Suggestions Bug List for {customerName} "
-                      f"with machine suggestion ID of {machineSuggestionId}")
+                print(f"\nFound machine suggestion ID of {machineSuggestionId} for {customerName}")
                 url = (pxc_url_customers + "/" +
                        customerId +
                        pxc_url_software_group_suggestions_bugs +
