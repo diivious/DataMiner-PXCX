@@ -174,7 +174,6 @@ import zipfile
 import time
 import sys
 import math
-# import random
 import base64
 from configparser import ConfigParser
 import boto3
@@ -234,7 +233,7 @@ pxc_url_crash_risk_assets_last_crashed = pxc_url_crash_risk + "sCrashed"
 pxc_url_crash_risk_asset_crash_history = "/crashHistory"
 
 # Data File Variables
-codeVersion = str("1.0.0.8")
+codeVersion = str("1.0.0.10")
 configFile = "config.ini"
 csv_output_dir = "outputcsv/"
 json_output_dir = "outputjson/"
@@ -754,8 +753,6 @@ def get_pxc_contracts_details():
                         print(f"\nFound details on contract number {contractNumber} for {customerName}")
                     while page < pages:
                         off_set = (page * int(max_items))
-                        if off_set <= int(max_items):
-                            off_set = 0
                         url = (pxc_url_contracts_details +
                                "?contractNumber=" + contractNumber +
                                "&offset=" + str(off_set) +
