@@ -9,4 +9,4 @@
 9. Added a new check in the pxc_automated_fault_management_affected_assets function to ensure that the 'caseAction' is not Null and if so, replace with a label of "None".
 10. Added a check for the reports including : 'Assets', 'Software', 'Hardware', 'FieldNotices', 'ProrityBugs', 'SecurityAdvisories', 'PurchasedLicenses', and 'Licenses' to skip the collection instead of crashing when API fails to return data after 20 attempts.
 11. Fixed a bug where a "/" was in the customers name and thus added to the filename for the JSON outputs causing the filename to be invalid.
-12. Added check to validate API returns customers 
+12. Added check to validate API returns customers
