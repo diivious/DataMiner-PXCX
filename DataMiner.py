@@ -341,8 +341,15 @@ def proccess_sandbox_files(filename, customerid, reportid, json_filename):
             os.rename((temp_dir + jsonfile), (temp_dir + customerid + reportid + json_filename))
 
 
+# Function explain usage
+def usage():
+    print(f"Usage: python3 {sys.argv[0]} <customer>")
+    print(f"Args:")
+    print(f"   Optional named section for customer auth credentials.\n")
+    exit()
+
 # Function to load configuration from config.ini and continue or create a template if not found and exit
-def load_config():
+def load_config(customer):
     global pxc_client_id
     global pxc_client_secret
     global s3access_key
@@ -365,12 +372,27 @@ def load_config():
         print("******************************************************************")
         print('Config.ini file was found, continuing...')
         config.read(configFile)
-        pxc_client_id = (config['credentials']['pxc_client_id'])
-        pxc_client_secret = (config['credentials']['pxc_client_secret'])
-        s3access_key = (config['credentials']['s3access_key'])
-        s3access_secret = (config['credentials']['s3access_secret'])
-        s3bucket_folder = (config['credentials']['s3bucket_folder'])
-        s3bucket_name = (config['credentials']['s3bucket_name'])
+
+        # customer name cant be 'settings'
+        if customer == 'settings':
+            print(f"\nError: Customer name name can not be the resertved string 'settings'")
+            usage()
+
+        # check to see if credentials exist for a named customer.
+        # default customer config is 'credentials'
+        if not customer in config:
+            print(f"\nError: Credentials for Customer {customer} not found in config.ini")
+            usage()
+            
+        # [credentials]
+        pxc_client_id = (config[customer]['pxc_client_id'])
+        pxc_client_secret = (config[customer]['pxc_client_secret'])
+        s3access_key = (config[customer]['s3access_key'])
+        s3access_secret = (config[customer]['s3access_secret'])
+        s3bucket_folder = (config[customer]['s3bucket_folder'])
+        s3bucket_name = (config[customer]['s3bucket_name'])
+
+        # [settings]
         wait_time = int((config['settings']["wait_time"]))
         pxc_fault_days = int((config['settings']["pxc_fault_days"]))
         max_items = (config['settings']["max_items"])
@@ -5965,8 +5987,16 @@ def pxc_asset_crash_history():
 Begin main application control
 =======================================================================
 '''
+# default 
+customer = 'credentials'
+
+# Check if an optional customer name was provided
+if len(sys.argv) > 1:
+    customer = sys.argv[1]
+
 # call function to load config.ini data into variables
-load_config()
+load_config(customer)
+
 # clear log folder before the script runs if logging is enabled
 if log_to_file == 1:
     if outputFormat == 1:
