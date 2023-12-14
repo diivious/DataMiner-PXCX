@@ -346,7 +346,7 @@ def usage():
     print(f"Usage: python3 {sys.argv[0]} <customer>")
     print(f"Args:")
     print(f"   Optional named section for customer auth credentials.\n")
-    exit()
+    sys.exit()
 
 # Function to load configuration from config.ini and continue or create a template if not found and exit
 def load_config(customer):
@@ -383,7 +383,7 @@ def load_config(customer):
         if not customer in config:
             print(f"\nError: Credentials for Customer {customer} not found in config.ini")
             usage()
-            
+
         # [credentials]
         pxc_client_id = (config[customer]['pxc_client_id'])
         pxc_client_secret = (config[customer]['pxc_client_secret'])
@@ -438,7 +438,7 @@ def load_config(customer):
         config.set("settings", "useProductionURL", "1")
         with open(configFile, 'w') as configfile:
             config.write(configfile)
-        exit()
+        sys.exit()
 
 
 # Function to upload all files in the output folders to AWS S3.
@@ -530,7 +530,7 @@ def get_pxc_token():
         print(f"Client ID: {pxc_client_id}")
         print(f"Client Secret: {pxc_client_secret}")
         print(f"Production APIs? : {useProductionURL}")
-        exit()
+        sys.exit()
 
 
 # Function to get the raw API JSON data from PX Cloud
@@ -553,18 +553,19 @@ def get_json_reply(url, tag):
                       "\nReview API Headers:", response.headers,
                       "\nResponse Body:", response.content)
             if response.status_code == 500:
-                if debug_level == 2:
+                if debug_level == 1 or debug_level == 2:
                     print("URL Request:", url,
                           "\nHTTP Code:", response.status_code,
                           "\nReview API Headers:", response.headers,
                           "\nResponse Body:", response.content)
                     print("Error retrieving API response")
             if response.status_code == 403:
-                print("\nFailed getting API data due to... \nResponse Body:", response.content)
-                print("URL Request:", url,
-                      "\nHTTP Code:", response.status_code,
-                      "\nReview API Headers:", response.headers,
-                      "\nResponse Body:", response.content)
+                if debug_level == 1 or debug_level == 2:
+                    print("\nFailed getting API data due to... \nResponse Body:", response.content)
+                    print("URL Request:", url,
+                          "\nHTTP Code:", response.status_code,
+                          "\nReview API Headers:", response.headers,
+                          "\nResponse Body:", response.content)
             try:
                 if response.status_code == 200:
                     if len(items) > 0:
@@ -576,7 +577,7 @@ def get_json_reply(url, tag):
                     return items
         except Exception as Error:
             if response.text.__contains__("Customer admin has not provided access."):
-                if debug_level == 2:
+                if debug_level == 1 or debug_level == 2:
                     print("\nResponse Body:", response.content)
                 if tag == "items":
                     print("Customer admin has not provided access....")
@@ -588,7 +589,7 @@ def get_json_reply(url, tag):
                     print("No Data Found....Skipping")
                 break
             elif response.status_code == 500 or response.status_code == 400:
-                if debug_level == 2:
+                if debug_level == 1 or debug_level == 2:
                     print("URL Request:", url,
                           "\nHTTP Code:", response.status_code,
                           "\nReview API Headers:", response.headers,
@@ -621,7 +622,7 @@ def get_pxc_customers():
     totalCount = (get_json_reply(url=(pxc_url_customers + "?max=" + max_items), tag="totalCount"))
     if not totalCount:
         print("No Customers found...., exiting....")
-        exit()
+        sys.exit()
     pages = math.ceil(totalCount / int(max_items))
     page = 0
     with open(customers, 'w', encoding="utf-8", newline='') as target:
@@ -933,7 +934,7 @@ def get_pxc_contracts_details():
             print(f"\nScanning {customerName}")
             response = requests.request("GET", url, headers=headers, data=payload, verify=True)
             reply = json.loads(response.text)
-            if debug_level == 1 or debug_level == 2:
+            if debug_level == 2:
                 print("\nURL Request:", url,
                       "\nHTTP Code:", response.status_code,
                       "\nReview API Headers:", response.headers,
@@ -943,7 +944,7 @@ def get_pxc_contracts_details():
                 if response.status_code == 200:
                     totalCount = reply["totalCount"]
                     pages = math.ceil(totalCount / int(max_items))
-                    if debug_level == 1 or debug_level == 2:
+                    if debug_level == 2:
                         print("\nTotal Pages:", pages,
                               "\nTotal Records: ", totalCount,
                               "\nURL Request:", url,
@@ -1014,10 +1015,10 @@ def get_pxc_contracts_details():
                                                         instanceNumber)
                                             writer.writerow(CSV_Data.split())
                         else:
-                            print("\nNo Data Found .... Skipping")
+                            print("\nNo Contract List Data Found .... Skipping")
                         page += 1
             except KeyError:
-                print("No Data to process... Skipping.")
+                print("No Contract Data to process... Skipping.")
                 pass
     print("\nSearch Completed!")
     if debug_level == 1 or debug_level == 2:
@@ -1164,7 +1165,7 @@ def get_pxc_partner_offers():
                                                 companyName)
                                     writer.writerow(CSV_Data.split())
         else:
-            print("\nNo Data Found .... Skipping")
+            print("\nNo Partner Offers Found .... Skipping")
     if outputFormat == 1 or outputFormat == 2:
         if items is not None:
             if len(items) > 0:
@@ -1281,7 +1282,7 @@ def get_pxc_partner_offer_sessions():
                                             modifiedDate)
                                 writer.writerow(CSV_Data.split())
         else:
-            print("\nNo Data Found .... Skipping")
+            print("\nNo Partner Offer Sessions Data Found .... Skipping")
     if outputFormat == 1 or outputFormat == 2:
         if items is not None:
             if len(items) > 0:
@@ -1519,7 +1520,7 @@ def pxc_assets_reports():
                                     print("\nDownload Failed")
                                     raise Exception("File Corrupted")
                         except Exception as FileCorruptError:
-                            if debug_level == 2:
+                            if debug_level == 1 or debug_level == 2:
                                 print("\nDeleting file..." + str(filename) + " " +
                                       str(FileCorruptError) + "\nRetrying....", end="")
                                 print(f"Pausing for {wait_time} seconds before retrying...", end="")
@@ -3557,7 +3558,7 @@ def pxc_software_groups():
                                             softwareGroupId)
                                 writer.writerow(CSV_Data.split())
                 else:
-                    print("No Data Found .... Skipping")
+                    print("No Software Groups Data Found .... Skipping")
     print("\nSearch Completed!")
     if debug_level == 1 or debug_level == 2:
         now = datetime.now()
@@ -4116,7 +4117,7 @@ def pxc_software_group_suggestions_bug_list():
                 if response.status_code == 200:
                     totalCount = reply["totalCount"]
                     pages = math.ceil(totalCount / int(max_items))
-                    if debug_level == 1 or debug_level == 2:
+                    if debug_level == 2:
                         print("\nTotal Pages:", pages,
                               "\nTotal Records: ", totalCount,
                               "\nURL Request:", url,
@@ -4168,7 +4169,7 @@ def pxc_software_group_suggestions_bug_list():
                                                     featureCount)
                                         writer.writerow(CSV_Data.split())
                         else:
-                            print("No Data Found .... Skipping")
+                            print("No Software Bug Data Found .... Skipping")
                         page += 1
             except KeyError:
                 print("No Data to process... Skipping.")
@@ -4285,7 +4286,7 @@ def pxc_software_group_suggestions_field_notices():
                                                         lastUpdated)
                                             writer.writerow(CSV_Data.split())
                         else:
-                            print("No Data Found .... Skipping")
+                            print("No Software Field Notices Data Found .... Skipping")
                         page += 1
             except KeyError:
                 print("No Data to process... Skipping.")
@@ -5982,171 +5983,182 @@ def pxc_asset_crash_history():
         print('Stop DateTime:', now)
     print("====================\n")
 
-
 '''
 Begin main application control
 =======================================================================
 '''
-# default 
-customer = 'credentials'
+if __name__ == '__main__':
+    # defaults
+    # default 
+    customer = 'credentials'
 
-# Check if an optional customer name was provided
-if len(sys.argv) > 1:
-    customer = sys.argv[1]
+    # Check if an optional customer name was provided
+    if len(sys.argv) > 1:
+        customer = sys.argv[1]
 
-# call function to load config.ini data into variables
-load_config(customer)
+    # call function to load config.ini data into variables
+    load_config(customer)
 
-# clear log folder before the script runs if logging is enabled
-if log_to_file == 1:
-    if outputFormat == 1:
-        print("Saving data in JSON and CSV formats")
-    if outputFormat == 2:
-        print("Saving data in JSON format")
-    if outputFormat == 3:
-        print("Saving data in CSV format")
-    if os.path.isdir(log_output_dir):
-        shutil.rmtree(log_output_dir)
-        os.mkdir(log_output_dir)
-    else:
-        os.mkdir(log_output_dir)
-# Set URL to Sandbox if useProductionURL is false
-if useProductionURL == 0:
-    pxc_url_base = urlProtocol + urlHost + urlLinkSandbox
-    pxc_scope = "api.customer.assets.manage"
-    environment = "Sandbox"
-elif useProductionURL == 1:
-    pxc_url_base = urlProtocol + urlHost + urlLink
-    pxc_scope = "api.authz.iam.manage"
-    environment = "Production"
-pxc_url_customers = pxc_url_base + "customers"
-pxc_url_contracts = pxc_url_base + "contracts"
-pxc_url_contractswithcustomers = pxc_url_base + "contractsWithCustomers"
-pxc_url_contracts_details = pxc_url_base + "contract/details"
-pxc_url_partner_offers = pxc_url_base + "partnerOffers"
-pxc_url_partner_offers_sessions = pxc_url_base + "partnerOffersSessions"
-pxc_url_successTracks = pxc_url_base + "successTracks"
+    # create a per-customer folder for saving data
+    if customer:
+        # Create the customers directory
+        os.makedirs(customer, exist_ok=True)
+        # Change into the directory
+        os.chdir(customer)
 
-# Set number of itterations for testing, time stamp, logging level and if the log should be written to file
-for x in range(0, testLoop):
-    if debug_level == 0:
-        logLevel = "Low"
-    elif debug_level == 1:
-        logLevel = "Medium"
-    elif debug_level == 2:
-        logLevel = "High"
+    # clear log folder before the script runs if logging is enabled
     if log_to_file == 1:
-        print(f"Logging output to file PXCloud_##.log with debug level set to {logLevel} for version {codeVersion}")
-        sys.stdout = open(log_output_dir + 'PXCLoud_' + str(x + 1) + '.log', 'wt')
-    startTime = time.time()
-    print('Start Time:', datetime.now())
-    print("Execution:", x + 1, "of", testLoop, "\nDebug level is:", logLevel, "\nVersion is", codeVersion,
-          "\nEnvironment is", environment)
-    if outputFormat == 1:
-        print("Saving data in JSON and CSV formats")
-    if outputFormat == 2:
-        print("Saving data in JSON format")
-    if outputFormat == 3:
-        print("Saving data in CSV format")
-
-    # delete temp and output directories and recreate before every run
-    temp_storage()
-
-    # call the function to get a valid PX Cloud API token
-    get_pxc_token()
-
-    # call the function to get the PX Cloud Customer List
-    get_pxc_customers()
-
-    # call the function to get the PX Cloud Contract List
-    get_pxc_contracts()  # requires CSV data from get_pxc_customers
-
-    # call the function to get the PX Cloud Contract List with customers Names and ID's
-    get_pxc_contractswithcustomers()  # requires CSV data from get_pxc_customers
-
-    # call the function to get the PX Cloud Contract Details
-    get_pxc_contracts_details()  # requires CSV data from get_pxc_contracts
-
-    # call the function to get the PX Cloud Partner Offers
-    get_pxc_partner_offers()
-
-    # call the function to get the PX Cloud Partner Offer Sessions
-    get_pxc_partner_offer_sessions()
-
-    # call the function to get the PX Success Tracks List
-    get_pxc_successtracks()
-
-    # call the function to request and process the PX Cloud Assets Reports data
-    pxc_assets_reports()  # requires CSV data from get_pxc_customers
-
-    # call the function to request and process the PX Cloud Hardware Reports data
-    pxc_hardware_reports()  # requires CSV data from get_pxc_customers
-
-    # call the function to request and process the PX Cloud Software Reports data
-    pxc_software_reports()  # requires CSV data from get_pxc_customers
-
-    # call the function to request and process the PX Cloud Purchased Licenses Reports data
-    pxc_purchased_licenses_reports()  # requires CSV data from get_pxc_customers
-
-    # call the function to request and process the PX Cloud Licenses Reports data
-    pxc_licenses_reports()  # requires CSV data from get_pxc_customers
-
-    # call the function to request and process the PX Cloud Security Advisories Reports data
-    pxc_security_advisories_reports()  # requires CSV data from get_pxc_customers
-
-    # call the function to request and process the PX Cloud Field Notices Reports data
-    pxc_field_notices_reports()  # requires CSV data from get_pxc_customers
-
-    # call the function to request and process the PX Cloud Priority Bugs Reports data
-    pxc_priority_bugs_reports()  # requires CSV data from get_pxc_customers
-
-    # call the function to get the PX Cloud Lifecycle data
-    get_pxc_lifecycle()  # requires CSV data from get_pxc_customers
-
-    # call the Optimal Software Version data from PX Cloud (currently only for Campus Network Success Tracks)
-    pxc_software_groups()  # requires CSV data from get_pxc_customers
-    pxc_software_group_suggestions()  # requires CSV data from pxc_software_groups
-    pxc_software_group_suggestions_assets()  # requires CSV data from pxc_software_groups
-    pxc_software_group_suggestions_bug_list()  # requires CSV data from pxc_software_group_suggestions
-    pxc_software_group_suggestions_field_notices()  # requires CSV data from pxc_software_group_suggestions
-    pxc_software_group_suggestions_advisories()  # requires CSV data from pxc_software_group_suggestions
-
-    # call the Automated Fault Management data from PX Cloud (currently only for Campus Network Success Tracks)
-    pxc_automated_fault_management_faults()  # requires CSV data from get_pxc_customers
-    pxc_automated_fault_management_fault_summary()  # requires CSV data from pxc_automated_fault_management_faults
-    pxc_automated_fault_management_affected_assets()  # requires CSV data from pxc_automated_fault_management_faults
-
-    # call the Regulatory Compliance Check data from PX Cloud (currently only for Campus Network Success Tracks)
-    pxc_compliance_violations()  # requires CSV data from get_pxc_customers
-    pxc_assets_violating_compliance_rule()  # requires CSV data from pxc_compliance_violations
-    pxc_compliance_rule_details()  # requires CSV data from pxc_compliance_violations
-    pxc_compliance_suggestions()  # requires CSV data from pxc_compliance_violations
-    pxc_assets_with_violations()  # requires CSV data from get_pxc_customers
-    pxc_asset_violations()  # requires CSV data from pxc_assets_with_violations
-    pxc_obtained()  # requires CSV data from get_pxc_customers
-
-    # call the Risk Mitigation Check data from PX Cloud (currently only for Campus Network Success Tracks)
-    pxc_crash_risk_assets()  # requires CSV data from get_pxc_customers
-    pxc_crash_risk_factors()  # requires CSV data from pxc_crash_risk_assets
-    pxc_similar_assets()  # requires CSV data from pxc_crash_risk_assets
-    pxc_crash_in_last()  # requires CSV data from pxc_crash_risk_assets
-    pxc_asset_crash_history()  # requires CSV data from pxc_crash_risk_assets
-
-    # Send all CSV files in the output data folder to AWS S3 storage
-    s3_storage()
-
-    # Record time and cleanly exit or run next itteration
-    print("******************************************************************")
-    print("**************** Script Executed Successfully ********************")
-    print("******************************************************************")
-    stopTime = time.time()
-    print(f"Stop Time:{datetime.now()}\n\n")
-    print(f"Total Time:{math.ceil(int(stopTime - startTime) / 60)} minutes")
-    if x + 1 == testLoop:
-        # Clean exit
+        if outputFormat == 1:
+            print("Saving data in JSON and CSV formats")
         if outputFormat == 2:
-            shutil.rmtree(csv_output_dir)
-        exit()
-    else:
-        print("pausing for 5 secs")
-        time.sleep(5)  # pause 5 sec between each itteration
+            print("Saving data in JSON format")
+        if outputFormat == 3:
+            print("Saving data in CSV format")
+        if os.path.isdir(log_output_dir):
+            shutil.rmtree(log_output_dir)
+            os.mkdir(log_output_dir)
+        else:
+            os.mkdir(log_output_dir)
+
+    # Set URL to Sandbox if useProductionURL is false
+    if useProductionURL == 0:
+        pxc_url_base = urlProtocol + urlHost + urlLinkSandbox
+        pxc_scope = "api.customer.assets.manage"
+        environment = "Sandbox"
+    elif useProductionURL == 1:
+        pxc_url_base = urlProtocol + urlHost + urlLink
+        pxc_scope = "api.authz.iam.manage"
+        environment = "Production"
+    pxc_url_customers = pxc_url_base + "customers"
+    pxc_url_contracts = pxc_url_base + "contracts"
+    pxc_url_contractswithcustomers = pxc_url_base + "contractsWithCustomers"
+    pxc_url_contracts_details = pxc_url_base + "contract/details"
+    pxc_url_partner_offers = pxc_url_base + "partnerOffers"
+    pxc_url_partner_offers_sessions = pxc_url_base + "partnerOffersSessions"
+    pxc_url_successTracks = pxc_url_base + "successTracks"
+
+    # Set number of itterations for testing, time stamp, logging level and if the log should be written to file
+    for x in range(0, testLoop):
+        if debug_level == 0:
+            logLevel = "Low"
+        elif debug_level == 1:
+            logLevel = "Medium"
+        elif debug_level == 2:
+            logLevel = "High"
+
+        if log_to_file == 1:
+            print(f"Logging output to file PXCloud_##.log with debug level set to {logLevel} for version {codeVersion}")
+            sys.stdout = open(log_output_dir + 'PXCLoud_' + str(x + 1) + '.log', 'wt')
+
+        startTime = time.time()
+        print('Start Time:', datetime.now())
+        print("Execution:", x + 1, "of", testLoop, "\nDebug level is:", logLevel, "\nVersion is", codeVersion,
+              "\nEnvironment is", environment)
+        if outputFormat == 1:
+            print("Saving data in JSON and CSV formats")
+        if outputFormat == 2:
+            print("Saving data in JSON format")
+        if outputFormat == 3:
+            print("Saving data in CSV format")
+
+        # delete temp and output directories and recreate before every run
+        temp_storage()
+
+        # call the function to get a valid PX Cloud API token
+        get_pxc_token()
+
+        # call the function to get the PX Cloud Customer List
+        get_pxc_customers()
+
+        # call the function to get the PX Cloud Contract List
+        get_pxc_contracts()  # requires CSV data from get_pxc_customers
+
+        # call the function to get the PX Cloud Contract List with customers Names and ID's
+        get_pxc_contractswithcustomers()  # requires CSV data from get_pxc_customers
+
+        # call the function to get the PX Cloud Contract Details
+        get_pxc_contracts_details()  # requires CSV data from get_pxc_contracts
+
+        # call the function to get the PX Cloud Partner Offers
+        get_pxc_partner_offers()
+
+        # call the function to get the PX Cloud Partner Offer Sessions
+        get_pxc_partner_offer_sessions()
+
+        # call the function to get the PX Success Tracks List
+        get_pxc_successtracks()
+
+        # call the function to request and process the PX Cloud Assets Reports data
+        pxc_assets_reports()  # requires CSV data from get_pxc_customers
+
+        # call the function to request and process the PX Cloud Hardware Reports data
+        pxc_hardware_reports()  # requires CSV data from get_pxc_customers
+
+        # call the function to request and process the PX Cloud Software Reports data
+        pxc_software_reports()  # requires CSV data from get_pxc_customers
+
+        # call the function to request and process the PX Cloud Purchased Licenses Reports data
+        pxc_purchased_licenses_reports()  # requires CSV data from get_pxc_customers
+
+        # call the function to request and process the PX Cloud Licenses Reports data
+        pxc_licenses_reports()  # requires CSV data from get_pxc_customers
+
+        # call the function to request and process the PX Cloud Security Advisories Reports data
+        pxc_security_advisories_reports()  # requires CSV data from get_pxc_customers
+
+        # call the function to request and process the PX Cloud Field Notices Reports data
+        pxc_field_notices_reports()  # requires CSV data from get_pxc_customers
+
+        # call the function to request and process the PX Cloud Priority Bugs Reports data
+        pxc_priority_bugs_reports()  # requires CSV data from get_pxc_customers
+
+        # call the function to get the PX Cloud Lifecycle data
+        get_pxc_lifecycle()  # requires CSV data from get_pxc_customers
+
+        # call the Optimal Software Version data from PX Cloud (currently only for Campus Network Success Tracks)
+        pxc_software_groups()  # requires CSV data from get_pxc_customers
+        pxc_software_group_suggestions()  # requires CSV data from pxc_software_groups
+        pxc_software_group_suggestions_assets()  # requires CSV data from pxc_software_groups
+        pxc_software_group_suggestions_bug_list()  # requires CSV data from pxc_software_group_suggestions
+        pxc_software_group_suggestions_field_notices()  # requires CSV data from pxc_software_group_suggestions
+        pxc_software_group_suggestions_advisories()  # requires CSV data from pxc_software_group_suggestions
+
+        # call the Automated Fault Management data from PX Cloud (currently only for Campus Network Success Tracks)
+        pxc_automated_fault_management_faults()  # requires CSV data from get_pxc_customers
+        pxc_automated_fault_management_fault_summary()  # requires CSV data from pxc_automated_fault_management_faults
+        pxc_automated_fault_management_affected_assets()  # requires CSV data from pxc_automated_fault_management_faults
+
+        # call the Regulatory Compliance Check data from PX Cloud (currently only for Campus Network Success Tracks)
+        pxc_compliance_violations()  # requires CSV data from get_pxc_customers
+        pxc_assets_violating_compliance_rule()  # requires CSV data from pxc_compliance_violations
+        pxc_compliance_rule_details()  # requires CSV data from pxc_compliance_violations
+        pxc_compliance_suggestions()  # requires CSV data from pxc_compliance_violations
+        pxc_assets_with_violations()  # requires CSV data from get_pxc_customers
+        pxc_asset_violations()  # requires CSV data from pxc_assets_with_violations
+        pxc_obtained()  # requires CSV data from get_pxc_customers
+
+        # call the Risk Mitigation Check data from PX Cloud (currently only for Campus Network Success Tracks)
+        pxc_crash_risk_assets()  # requires CSV data from get_pxc_customers
+        pxc_crash_risk_factors()  # requires CSV data from pxc_crash_risk_assets
+        pxc_similar_assets()  # requires CSV data from pxc_crash_risk_assets
+        pxc_crash_in_last()  # requires CSV data from pxc_crash_risk_assets
+        pxc_asset_crash_history()  # requires CSV data from pxc_crash_risk_assets
+
+        # Send all CSV files in the output data folder to AWS S3 storage
+        s3_storage()
+
+        # Record time and cleanly exit or run next itteration
+        print("******************************************************************")
+        print("**************** Script Executed Successfully ********************")
+        print("******************************************************************")
+        stopTime = time.time()
+        print(f"Stop Time:{datetime.now()}\n\n")
+        print(f"Total Time:{math.ceil(int(stopTime - startTime) / 60)} minutes")
+        if x + 1 == testLoop:
+            # Clean exit
+            if outputFormat == 2:
+                shutil.rmtree(csv_output_dir)
+            exit()
+        else:
+            print("pausing for 5 secs")
+            time.sleep(5)  # pause 5 sec between each itteration
