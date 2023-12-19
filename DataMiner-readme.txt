@@ -1,1 +1,0 @@
-1. Resolved issue with Lifecycle data not being processed
