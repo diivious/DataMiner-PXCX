@@ -367,8 +367,8 @@ def load_config(customer):
 
     config = ConfigParser()
     if os.path.isfile(configFile):
-        print("******************************************************************")
-        print("****************** CISCO PX Cloud Data Miner *********************")
+        print('********************** CISCO PX Cloud Data Miner *********************\n')
+        print(f'********************* Minning Data for {customer} ********************\n')
         print("******************************************************************")
         print('Config.ini file was found, continuing...')
         config.read(configFile)
