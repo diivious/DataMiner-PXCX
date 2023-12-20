@@ -166,6 +166,8 @@ Version Features and enhancements
 """
 
 import requests
+from requests.adapters import HTTPAdapter
+from requests.packages.urllib3.util.retry import Retry
 import json
 import csv
 import os
@@ -310,6 +312,98 @@ Begin defining functions
 =======================================================================
 '''
 
+def px_api_exception(e):
+    #if debug_level == 1 and hasattr(e, 'request') and e.request:
+    if hasattr(e, 'request') and e.request:
+        # Print details of the request that caused the exception
+        print("Request URL:", e.request.url)
+        print("Request Method:", e.request.method)
+        if debug_level == 2:
+            print("Request Headers:", e.request.headers)
+            print("Request Body:", e.request.body)
+
+    # if debug_level == 2 and hasattr(e, 'response') and e.response:
+    if hasattr(e, 'response') and e.response:
+        # Print details of the response received before the timeout
+        print("Response Status Code:", e.response.status_code)
+        if debug_level == 2:
+            print("Response Headers:", e.response.headers)
+            print("Response Content:", e.response.text)
+
+
+def px_api_request(method, url, headers, payload):
+    tries = 1
+    response = []
+
+    # Include all HTTP error codes (4xx and 5xx) in status_forcelist
+    all_error_codes = [code for code in range(400, 600)]
+
+    # Create a custom Retry object with max retries
+    retry_strategy = Retry(
+        total=30,		# Maximum number of retries
+        backoff_factor=0.1,	# Factor to apply between retry attempts
+        status_forcelist=all_error_codes,
+    )
+    
+    # Create a custom HTTPAdapter with the Retry strategy
+    adapter = HTTPAdapter(max_retries=retry_strategy)
+
+    # Create a Session and mount the custom adapter
+    session = requests.Session()
+    session.mount('https://', adapter)
+    session.mount('http://', adapter)
+
+    while True:
+        try:
+            if method == "GET":
+                response = requests.request(method, url, headers=headers, verify=True, timeout=10)
+            else:
+                response = requests.request(method, url, headers=headers, data=payload, verify=True, timeout=10)
+
+            response.raise_for_status()  # Raise an HTTPError for bad responses (4xx and 5xx)
+
+            if response.status_code == 500:
+                if debug_level == 1 or debug_level == 2:
+                    print("URL Request:", url,
+                          "\nHTTP Code:", response.status_code,
+                          "\nReview API Headers:", response.headers,
+                          "\nResponse Body:", response.content)
+                print("Error 500 retrieving API response")
+            elif response.status_code == 403:
+                if debug_level == 1 or debug_level == 2:
+                    print("\nFailed getting API data due to... \nResponse Body:", response.content)
+                    print("URL Request:", url,
+                          "\nHTTP Code:", response.status_code,
+                          "\nReview API Headers:", response.headers,
+                          "\nResponse Body:", response.content)
+                print("Error 403 retrieving API response")
+
+            else:
+                return response
+
+        except requests.exceptions.ReadTimeout as e:
+            print(f"ReadTimeoutError: Attempt {tries}: {e}")
+            px_api_exception(e)
+        except requests.exceptions.Timeout as e:
+            print(f"TimeoutError: Attempt {tries}: {e}")
+            px_api_exception(e)
+        except ConnectionError as e:
+            print(f"ConnectionError: Attempt {tries}: {e}")
+            px_api_exception(e)
+        except requests.exceptions.HTTPError as e:
+            print(f"HTTPError: Attempt {tries}: {e}")
+            px_api_exception(e)
+        except requests.exceptions.RequestException as e:
+            print(f"RequestException: Attempt {tries}: {e}")
+            px_api_exception(e)
+        except Exception as e:
+            print(f"Unexpected error: Attempt {tries}: {e}")
+            px_api_exception(e)
+        finally:
+            time.sleep(2)  # 2 seconds delay before the next attempt
+            tries += 1
+        #End Try
+    #End While
 
 def token_time_check():
     checkTime = time.time()
@@ -511,7 +605,7 @@ def get_pxc_token():
     headers = {
         'Content-type': 'application/x-www-form-urlencoded'
     }
-    response = requests.request("POST", url, headers=headers, data=payload)
+    response = px_api_request("POST", url, headers, payload)
     reply = json.loads(response.text)
     try:
         token = (reply["access_token"])
@@ -543,7 +637,7 @@ def get_json_reply(url, tag):
             headers = {
                 'Authorization': f'Bearer {token}'
             }
-            response = requests.request("GET", url, headers=headers, data=payload, verify=True, timeout=10)
+            response = px_api_request("GET", url, headers, payload)
             response.raise_for_status()  # Raise an HTTPError for bad responses (4xx and 5xx)
 
             reply = json.loads(response.text)
@@ -939,7 +1033,7 @@ def get_pxc_contracts_details():
                    "&offset=0&max=50"
                    )
             print(f"\nScanning {customerName}")
-            response = requests.request("GET", url, headers=headers, data=payload, verify=True)
+            response = px_api_request("GET", url, headers, payload)
             reply = json.loads(response.text)
             if debug_level == 2:
                 print("\nURL Request:", url,
@@ -1447,13 +1541,7 @@ def pxc_assets_reports():
                 url = (pxc_url_customers + "/" + customerId + "/reports")
                 data_payload = json.dumps({"reportName": "Assets", "successTrackId": successTrackId})
                 headers = {'Authorization': f'Bearer {token}'}
-                response = requests.request(
-                    "POST",
-                    url,
-                    headers=headers,
-                    data=data_payload,
-                    verify=True
-                )
+                response = px_api_request("POST", url, headers, data_payload)
                 if debug_level == 2:
                     print("Report request URL:", url,
                           "\nReport details:", data_payload,
@@ -1484,13 +1572,7 @@ def pxc_assets_reports():
                             print("Making API Call again with the following...")
                             print("URL: ", url)
                             print("Data Payload: ", data_payload)
-                            response = requests.request(
-                                "POST",
-                                url,
-                                headers=headers,
-                                data=data_payload,
-                                verify=True
-                            )
+                            response = px.request("POST", url, headers, data_payload)
                             print("Report request URL:", url,
                                   "\nReport details:", data_payload,
                                   "\nHTTP Code:", response.status_code,
@@ -1507,7 +1589,7 @@ def pxc_assets_reports():
                         print("Scanning for data...")
                         filename = (temp_dir + customerId + "_Assets_" + location.split('/')[-1] + '.zip')
                         headers = {'Authorization': f'Bearer {token}'}
-                        response = requests.request("GET", location, headers=headers, data=payload)
+                        response = px_api_request("GET", location, headers, payload)
                         if debug_level == 2:
                             print("\nLocation URL Returned:", location,
                                   "\nHTTP Code:", response.status_code,
@@ -1816,13 +1898,7 @@ def pxc_hardware_reports():
                 url = (pxc_url_customers + "/" + customerId + "/reports")
                 data_payload = json.dumps({"reportName": "hardware", "successTrackId": successTrackId})
                 headers = {'Authorization': f'Bearer {token}'}
-                response = requests.request(
-                    "POST",
-                    url,
-                    headers=headers,
-                    data=data_payload,
-                    verify=True
-                )
+                response = px_api_request("POST", url, headers, data_payload)
                 if debug_level == 2:
                     print("Report request URL:", url,
                           "\nReport details:", data_payload,
@@ -1853,13 +1929,7 @@ def pxc_hardware_reports():
                             print("Making API Call again with the following...")
                             print("URL: ", url)
                             print("Data Payload: ", data_payload)
-                            response = requests.request(
-                                "POST",
-                                url,
-                                headers=headers,
-                                data=data_payload,
-                                verify=True
-                            )
+                            response = px_api_request("POST", url, headers, data_payload)
                             print("Report request URL:", url,
                                   "\nReport details:", data_payload,
                                   "\nHTTP Code:", response.status_code,
@@ -1876,7 +1946,7 @@ def pxc_hardware_reports():
                         print("Scanning for data...")
                         filename = (temp_dir + location.split('/')[-1] + '.zip')
                         headers = {'Authorization': f'Bearer {token}'}
-                        response = requests.request("GET", location, headers=headers, data=payload)
+                        response = px_api_request("GET", location, headers, payload)
                         if debug_level == 2:
                             print("\nLocation URL Returned:", location,
                                   "\nHTTP Code:", response.status_code,
@@ -2060,13 +2130,7 @@ def pxc_software_reports():
                 url = (pxc_url_customers + "/" + customerId + "/reports")
                 data_payload = json.dumps({"reportName": "software", "successTrackId": successTrackId})
                 headers = {'Authorization': f'Bearer {token}'}
-                response = requests.request(
-                    "POST",
-                    url,
-                    headers=headers,
-                    data=data_payload,
-                    verify=True
-                )
+                response = px_api_request("POST", url, headers, data_payload)
                 if debug_level == 2:
                     print("Report request URL:", url,
                           "\nReport details:", data_payload,
@@ -2097,13 +2161,7 @@ def pxc_software_reports():
                             print("Making API Call again with the following...")
                             print("URL: ", url)
                             print("Data Payload: ", data_payload)
-                            response = requests.request(
-                                "POST",
-                                url,
-                                headers=headers,
-                                data=data_payload,
-                                verify=True
-                            )
+                            response = px_api_request("POST", url, headers, data_payload)
                             print("Report request URL:", url,
                                   "\nReport details:", data_payload,
                                   "\nHTTP Code:", response.status_code,
@@ -2120,7 +2178,7 @@ def pxc_software_reports():
                         print("Scanning for data...")
                         filename = (temp_dir + location.split('/')[-1] + '.zip')
                         headers = {'Authorization': f'Bearer {token}'}
-                        response = requests.request("GET", location, headers=headers, data=payload)
+                        response = px_api_request("GET", location, headers, payload)
                         if debug_level == 2:
                             print("\nLocation URL Returned:", location,
                                   "\nHTTP Code:", response.status_code,
@@ -2280,13 +2338,7 @@ def pxc_purchased_licenses_reports():
                 url = (pxc_url_customers + "/" + customerId + "/reports")
                 data_payload = json.dumps({"reportName": "PurchasedLicenses", "successTrackId": successTrackId})
                 headers = {'Authorization': f'Bearer {token}'}
-                response = requests.request(
-                    "POST",
-                    url,
-                    headers=headers,
-                    data=data_payload,
-                    verify=True
-                )
+                response = px_api_request("POST", url, headers, data_payload)
                 if debug_level == 2:
                     print("Report request URL:", url,
                           "\nReport details:", data_payload,
@@ -2317,13 +2369,7 @@ def pxc_purchased_licenses_reports():
                             print("Making API Call again with the following...")
                             print("URL: ", url)
                             print("Data Payload: ", data_payload)
-                            response = requests.request(
-                                "POST",
-                                url,
-                                headers=headers,
-                                data=data_payload,
-                                verify=True
-                            )
+                            response = px_api_request("POST", url, headers, data_payload)
                             print("Report request URL:", url,
                                   "\nReport details:", data_payload,
                                   "\nHTTP Code:", response.status_code,
@@ -2340,7 +2386,7 @@ def pxc_purchased_licenses_reports():
                         print("Scanning for data...")
                         filename = (temp_dir + location.split('/')[-1] + '.zip')
                         headers = {'Authorization': f'Bearer {token}'}
-                        response = requests.request("GET", location, headers=headers, data=payload)
+                        response = px_api_request("GET", location, headers, payload)
                         if debug_level == 2:
                             print("\nLocation URL Returned:", location,
                                   "\nHTTP Code:", response.status_code,
@@ -2493,13 +2539,7 @@ def pxc_licenses_reports():
                 url = (pxc_url_customers + "/" + customerId + "/reports")
                 data_payload = json.dumps({"reportName": "Licenses", "successTrackId": successTrackId})
                 headers = {'Authorization': f'Bearer {token}'}
-                response = requests.request(
-                    "POST",
-                    url,
-                    headers=headers,
-                    data=data_payload,
-                    verify=True
-                )
+                response = px_api_request("POST", url, headers, data_payload)
                 if debug_level == 2:
                     print("Report request URL:", url,
                           "\nReport details:", data_payload,
@@ -2530,13 +2570,7 @@ def pxc_licenses_reports():
                             print("Making API Call again with the following...")
                             print("URL: ", url)
                             print("Data Payload: ", data_payload)
-                            response = requests.request(
-                                "POST",
-                                url,
-                                headers=headers,
-                                data=data_payload,
-                                verify=True
-                            )
+                            response = px_api_request("POST", url, headers, data_payload)
                             print("Report request URL:", url,
                                   "\nReport details:", data_payload,
                                   "\nHTTP Code:", response.status_code,
@@ -2553,7 +2587,7 @@ def pxc_licenses_reports():
                         print("Scanning for data...")
                         filename = (temp_dir + location.split('/')[-1] + '.zip')
                         headers = {'Authorization': f'Bearer {token}'}
-                        response = requests.request("GET", location, headers=headers, data=payload)
+                        response = px_api_request("GET", location, headers, payload)
                         if debug_level == 2:
                             print("\nLocation URL Returned:", location,
                                   "\nHTTP Code:", response.status_code,
@@ -2735,13 +2769,7 @@ def pxc_security_advisories_reports():
                 url = (pxc_url_customers + "/" + customerId + "/reports")
                 data_payload = json.dumps({"reportName": "securityadvisories", "successTrackId": successTrackId})
                 headers = {'Authorization': f'Bearer {token}'}
-                response = requests.request(
-                    "POST",
-                    url,
-                    headers=headers,
-                    data=data_payload,
-                    verify=True
-                )
+                response = px_api_request("POST", url, headers, data_payload)
                 if debug_level == 2:
                     print("Report request URL:", url,
                           "\nReport details:", data_payload,
@@ -2772,13 +2800,7 @@ def pxc_security_advisories_reports():
                             print("Making API Call again with the following...")
                             print("URL: ", url)
                             print("Data Payload: ", data_payload)
-                            response = requests.request(
-                                "POST",
-                                url,
-                                headers=headers,
-                                data=data_payload,
-                                verify=True
-                            )
+                            response = px_api_request("POST", url, headers, data_payload)
                             print("Report request URL:", url,
                                   "\nReport details:", data_payload,
                                   "\nHTTP Code:", response.status_code,
@@ -2795,7 +2817,7 @@ def pxc_security_advisories_reports():
                         print("Scanning for data...")
                         filename = (temp_dir + location.split('/')[-1] + '.zip')
                         headers = {'Authorization': f'Bearer {token}'}
-                        response = requests.request("GET", location, headers=headers, data=payload)
+                        response = px_api_request("GET", location, headers, payload)
                         if debug_level == 2:
                             print("\nLocation URL Returned:", location,
                                   "\nHTTP Code:", response.status_code,
@@ -2971,13 +2993,7 @@ def pxc_field_notices_reports():
                 url = (pxc_url_customers + "/" + customerId + "/reports")
                 data_payload = json.dumps({"reportName": "FieldNotices", "successTrackId": successTrackId})
                 headers = {'Authorization': f'Bearer {token}'}
-                response = requests.request(
-                    "POST",
-                    url,
-                    headers=headers,
-                    data=data_payload,
-                    verify=True
-                )
+                response = px_api_request("POST", url, headers, data_payload)
                 if debug_level == 2:
                     print("Report request URL:", url,
                           "\nReport details:", data_payload,
@@ -3008,13 +3024,7 @@ def pxc_field_notices_reports():
                             print("Making API Call again with the following...")
                             print("URL: ", url)
                             print("Data Payload: ", data_payload)
-                            response = requests.request(
-                                "POST",
-                                url,
-                                headers=headers,
-                                data=data_payload,
-                                verify=True
-                            )
+                            response = px_api_request("POST", url, headers, data_payload)
                             print("Report request URL:", url,
                                   "\nReport details:", data_payload,
                                   "\nHTTP Code:", response.status_code,
@@ -3031,7 +3041,7 @@ def pxc_field_notices_reports():
                         print("Scanning for data...")
                         filename = (temp_dir + location.split('/')[-1] + '.zip')
                         headers = {'Authorization': f'Bearer {token}'}
-                        response = requests.request("GET", location, headers=headers, data=payload)
+                        response = px_api_request("GET", location, headers, payload)
                         if debug_level == 2:
                             print("\nLocation URL Returned:", location,
                                   "\nHTTP Code:", response.status_code,
@@ -3204,13 +3214,7 @@ def pxc_priority_bugs_reports():
                 url = (pxc_url_customers + "/" + customerId + "/reports")
                 data_payload = json.dumps({"reportName": "prioritybugs", "successTrackId": successTrackId})
                 headers = {'Authorization': f'Bearer {token}'}
-                response = requests.request(
-                    "POST",
-                    url,
-                    headers=headers,
-                    data=data_payload,
-                    verify=True
-                )
+                response = px_api_request("POST", url, headers, data_payload)
                 if debug_level == 2:
                     print("Report request URL:", url,
                           "\nReport details:", data_payload,
@@ -3240,13 +3244,7 @@ def pxc_priority_bugs_reports():
                             print("Making API Call again with the following...")
                             print("URL: ", url)
                             print("Data Payload: ", data_payload)
-                            response = requests.request(
-                                "POST",
-                                url,
-                                headers=headers,
-                                data=data_payload,
-                                verify=True
-                            )
+                            response = px_api_request("POST", url, headers, data_payload)
                             print("Report request URL:", url,
                                   "\nReport details:", data_payload,
                                   "\nHTTP Code:", response.status_code,
@@ -3263,7 +3261,7 @@ def pxc_priority_bugs_reports():
                         print("Scanning for data...")
                         filename = (temp_dir + location.split('/')[-1] + '.zip')
                         headers = {'Authorization': f'Bearer {token}'}
-                        response = requests.request("GET", location, headers=headers, data=payload)
+                        response = px_api_request("GET", location, headers, payload)
                         if debug_level == 2:
                             print("\nLocation URL Returned:", location,
                                   "\nHTTP Code:", response.status_code,
@@ -3681,7 +3679,7 @@ def pxc_software_group_suggestions():
                     headers = {
                         'Authorization': f'Bearer {token}'
                     }
-                    response = requests.request("GET", url, headers=headers, verify=True)
+                    response = px_api_request("GET", url, headers)
                     reply = json.loads(response.text)
                     if response.status_code == 200:
                         jsonDump = {'items': [reply]}
@@ -4118,7 +4116,7 @@ def pxc_software_group_suggestions_bug_list():
                        "&max=" + max_items +
                        "&machineSuggestionId=" + machineSuggestionId +
                        "&successTrackId=" + successTrackId)
-            response = requests.request("GET", url, headers=headers, data=payload, verify=True)
+            response = px_api_request("GET", url, headers, payload)
             reply = json.loads(response.text)
             try:
                 if response.status_code == 200:
@@ -4232,7 +4230,7 @@ def pxc_software_group_suggestions_field_notices():
                        "&max=" + max_items +
                        "&machineSuggestionId=" + machineSuggestionId +
                        "&successTrackId=" + successTrackId)
-                response = requests.request("GET", url, headers=headers, data=payload, verify=True)
+                response = px_api_request("GET", url, headers, payload)
                 reply = json.loads(response.text)
             try:
                 if response.status_code == 200:
@@ -4349,7 +4347,7 @@ def pxc_software_group_suggestions_advisories():
                    "&max=" + max_items +
                    "&machineSuggestionId=" + machineSuggestionId +
                    "&successTrackId=" + successTrackId)
-            response = requests.request("GET", url, headers=headers, data=payload, verify=True)
+            response = px_api_request("GET", url, headers, payload)
             reply = json.loads(response.text)
             try:
                 if response.status_code == 200:
@@ -4762,7 +4760,7 @@ def pxc_compliance_violations():
                        "?successTrackId=" + successTrackId +
                        "&days=30" +
                        "&max=" + max_items)
-                response = requests.request("GET", url, headers=headers, data=payload, verify=True)
+                response = px_api_request("GET", url, headers, payload)
                 reply = json.loads(response.text)
                 page = 0
                 try:
@@ -5036,7 +5034,7 @@ def pxc_compliance_rule_details():
                 headers = {
                     'Authorization': f'Bearer {token}'
                 }
-                response = requests.request("GET", url, headers=headers, verify=True)
+                response = px_api_requests("GET", url, headers, "")
                 reply = json.loads(response.text)
                 if response.status_code == 200:
                     items = {'items': [reply]}
@@ -5136,7 +5134,7 @@ def pxc_compliance_suggestions():
             if fileNum == 1:
                 print(f"Found Compliance Suggestions on Success Track {successTrackId} "
                       f"for {customerName}")
-            response = requests.request("GET", url, headers=headers, data=payload, verify=True)
+            response = px_api_request("GET", url, headers, payload)
             reply = json.loads(response.text)
             if debug_level == 1 or debug_level == 2:
                 print(reply)
@@ -5472,7 +5470,7 @@ def pxc_obtained():
                     headers = {
                         'Authorization': f'Bearer {token}'
                     }
-                    response = requests.request("GET", url, headers=headers, verify=True)
+                    response = px_api_requests("GET", url, headers, "")
                     reply = json.loads(response.text)
                     if response.status_code == 200:
                         if len(reply) > 0:
