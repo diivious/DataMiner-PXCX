@@ -543,7 +543,9 @@ def get_json_reply(url, tag):
             headers = {
                 'Authorization': f'Bearer {token}'
             }
-            response = requests.request("GET", url, headers=headers, data=payload, verify=True)
+            response = requests.request("GET", url, headers=headers, data=payload, verify=True, timeout=10)
+            response.raise_for_status()  # Raise an HTTPError for bad responses (4xx and 5xx)
+
             reply = json.loads(response.text)
             items = reply[tag]
             if debug_level == 2:
@@ -575,6 +577,11 @@ def get_json_reply(url, tag):
             finally:
                 if response.status_code == 200:
                     return items
+
+        except requests.exceptions.Timeout as e:
+            print(f"Timeout error (Attempt {tries}): {e}")
+            time.sleep(2)  # 2 seconds delay before the next attempt
+
         except Exception as Error:
             if response.text.__contains__("Customer admin has not provided access."):
                 if debug_level == 1 or debug_level == 2:
