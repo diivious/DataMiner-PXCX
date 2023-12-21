@@ -400,7 +400,9 @@ def px_api_request(method, url, headers, payload):
             print(f"Unexpected error: Attempt {tries}: {e}")
             px_api_exception(e)
         finally:
-            time.sleep(2)  # 2 seconds delay before the next attempt
+            if token:
+                token_time_check()	# best checkto see if we have to refresh token
+            time.sleep(2)		# 2 seconds delay before the next attempt
             tries += 1
         #End Try
     #End While
@@ -408,9 +410,11 @@ def px_api_request(method, url, headers, payload):
 def token_time_check():
     checkTime = time.time()
     tokenTime = math.ceil(int(checkTime - tokenStartTime) / 60)
-    if debug_level == 1 or debug_level == 2:
+    if debug_level == 2:
         print(f"Token time is :{tokenTime} minutes")
     if tokenTime > 110:
+        if debug_level == 1 or debug_level == 2:
+            print(f"Token Time is :{tokenTime} minutes, Refreshing")
         get_pxc_token()
 
 
