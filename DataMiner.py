@@ -165,23 +165,26 @@ Version Features and enhancements
 
 """
 
-import requests
-from requests.adapters import HTTPAdapter
-from requests.packages.urllib3.util.retry import Retry
-import json
-import csv
-import os
-import shutil
-import zipfile
-import time
-import sys
-import math
 import base64
-from configparser import ConfigParser
 import boto3
+import csv
+import json
+import inspect
+import math
+import os
+import re
+import requests
+import shutil
+import sys
+import time
+import zipfile
+
 from botocore.exceptions import ClientError
 from botocore.exceptions import NoCredentialsError
+from configparser import ConfigParser
 from datetime import datetime
+from requests.adapters import HTTPAdapter
+from requests.packages.urllib3.util.retry import Retry
 
 """
 Notes on Imports
@@ -312,9 +315,33 @@ Begin defining functions
 =======================================================================
 '''
 
+#
+# Cleanup file name to be Windows compatable
+def WindowsFileName(json_filename):
+    # Define a pattern to match characters not allowed in Windows filenames
+    invalid_char_pattern = re.compile(r'[<>:"/\\|?* &\x00-\x1F]+')
+
+    # Replace invalid characters with an underscore
+    filename = invalid_char_pattern.sub('_', json_filename)
+    return filename
+
+#
+# JSON Naming Convention: <page_name>_Page_{page}.json
+def PageFileName(page_name, page):
+    filename = page_name + "_Page_" + str(page) + ".json"
+    return WindowsFileName(filename)
+
+#
+# JSON Naming Convention: <page_name>_Page_{page}_of_{total}.json
+def PageOfFileName(page_name, page, total):
+    filename = page_name + "_Page_" + str(page) + "_of_" + str(total) + ".json"
+    return WindowsFileName(filename)
+
+#
+# common error logging
+#    TBD: use logger instead of prints
 def px_api_exception(e):
-    #if debug_level == 1 and hasattr(e, 'request') and e.request:
-    if hasattr(e, 'request') and e.request:
+    if (debug_level == 1 or debug_level == 2) and hasattr(e, 'request') and e.request:
         # Print details of the request that caused the exception
         print("Request URL:", e.request.url)
         print("Request Method:", e.request.method)
@@ -322,16 +349,19 @@ def px_api_exception(e):
             print("Request Headers:", e.request.headers)
             print("Request Body:", e.request.body)
 
-    # if debug_level == 2 and hasattr(e, 'response') and e.response:
-    if hasattr(e, 'response') and e.response:
+    if (debug_level == 1 or debug_level == 2) and hasattr(e, 'response') and e.response:
         # Print details of the response received before the timeout
         print("Response Status Code:", e.response.status_code)
         if debug_level == 2:
             print("Response Headers:", e.response.headers)
             print("Response Content:", e.response.text)
 
-
+#
+# function to contain the error logic for any API request call
+#    TBD: use *kwargs and get rid of if method
 def px_api_request(method, url, headers, payload):
+    global token
+    firstTime = True
     tries = 1
     response = []
 
@@ -353,6 +383,15 @@ def px_api_request(method, url, headers, payload):
     session.mount('https://', adapter)
     session.mount('http://', adapter)
 
+    # Rather Chatty ...
+    if debug_level == 2:
+        caller = inspect.currentframe().f_back.f_code.co_name
+        print("{caller}: Request URL:", url,
+              "\nReport details:", data_payload,
+              "\nHTTP Code:", response.status_code,
+              "\nReview API Headers:", response.headers,
+              "\nResponse Body:", response.content)
+
     while True:
         try:
             if method == "GET":
@@ -361,25 +400,9 @@ def px_api_request(method, url, headers, payload):
                 response = requests.request(method, url, headers=headers, data=payload, verify=True, timeout=10)
 
             response.raise_for_status()  # Raise an HTTPError for bad responses (4xx and 5xx)
-
-            if response.status_code == 500:
-                if debug_level == 1 or debug_level == 2:
-                    print("URL Request:", url,
-                          "\nHTTP Code:", response.status_code,
-                          "\nReview API Headers:", response.headers,
-                          "\nResponse Body:", response.content)
-                print("Error 500 retrieving API response")
-            elif response.status_code == 403:
-                if debug_level == 1 or debug_level == 2:
-                    print("\nFailed getting API data due to... \nResponse Body:", response.content)
-                    print("URL Request:", url,
-                          "\nHTTP Code:", response.status_code,
-                          "\nReview API Headers:", response.headers,
-                          "\nResponse Body:", response.content)
-                print("Error 403 retrieving API response")
-
-            else:
-                return response
+            if tries >= 2:
+                print("\nSuccess on retry! \nContinuing.\n", end="")
+            return response
 
         except requests.exceptions.ReadTimeout as e:
             print(f"ReadTimeoutError: Attempt {tries}: {e}")
@@ -393,6 +416,17 @@ def px_api_request(method, url, headers, payload):
         except requests.exceptions.HTTPError as e:
             print(f"HTTPError: Attempt {tries}: {e}")
             px_api_exception(e)
+            if response.status_code >= 500:
+                print("Server Error: Retrying API call")
+            elif response.status_code == 401:
+                if FirstTime:
+                    # Unauthorized? lets see if a new token will help.. but only try once
+                    get_pxc_token()
+                    firstTiome = FALSE
+            elif response.status_code >= 400:
+                print("Client Error: Aborting API call")
+                response = []
+                break
         except requests.exceptions.RequestException as e:
             print(f"RequestException: Attempt {tries}: {e}")
             px_api_exception(e)
@@ -406,13 +440,14 @@ def px_api_request(method, url, headers, payload):
             tries += 1
         #End Try
     #End While
+    return response
 
 def token_time_check():
     checkTime = time.time()
     tokenTime = math.ceil(int(checkTime - tokenStartTime) / 60)
     if debug_level == 2:
         print(f"Token time is :{tokenTime} minutes")
-    if tokenTime > 110:
+    if tokenTime > 99:
         if debug_level == 1 or debug_level == 2:
             print(f"Token Time is :{tokenTime} minutes, Refreshing")
         get_pxc_token()
@@ -609,6 +644,7 @@ def get_pxc_token():
     headers = {
         'Content-type': 'application/x-www-form-urlencoded'
     }
+    token = ""		# inti token to empty sting
     response = px_api_request("POST", url, headers, payload)
     reply = json.loads(response.text)
     try:
@@ -642,30 +678,11 @@ def get_json_reply(url, tag):
                 'Authorization': f'Bearer {token}'
             }
             response = px_api_request("GET", url, headers, payload)
-            response.raise_for_status()  # Raise an HTTPError for bad responses (4xx and 5xx)
+            if response:
+                response.raise_for_status()  # Raise an HTTPError for bad responses (4xx and 5xx)
+                reply = json.loads(response.text)
+                items = reply[tag]
 
-            reply = json.loads(response.text)
-            items = reply[tag]
-            if debug_level == 2:
-                print("URL Request:", url,
-                      "\nURL Tag:", tag,
-                      "\nHTTP Code:", response.status_code,
-                      "\nReview API Headers:", response.headers,
-                      "\nResponse Body:", response.content)
-            if response.status_code == 500:
-                if debug_level == 1 or debug_level == 2:
-                    print("URL Request:", url,
-                          "\nHTTP Code:", response.status_code,
-                          "\nReview API Headers:", response.headers,
-                          "\nResponse Body:", response.content)
-                    print("Error retrieving API response")
-            if response.status_code == 403:
-                if debug_level == 1 or debug_level == 2:
-                    print("\nFailed getting API data due to... \nResponse Body:", response.content)
-                    print("URL Request:", url,
-                          "\nHTTP Code:", response.status_code,
-                          "\nReview API Headers:", response.headers,
-                          "\nResponse Body:", response.content)
             try:
                 if response.status_code == 200:
                     if len(items) > 0:
@@ -764,10 +781,7 @@ def get_pxc_customers():
             if items is not None:
                 if len(items) > 0:
                     with open(json_output_dir +
-                              "Customers" +
-                              "_Page_" + str(page) +
-                              "_of_" + str(pages) +
-                              ".json", 'w') as json_file:
+                              PageOfFileName("Customers", page, pages), 'w') as json_file:
                         json.dump(items, json_file)
                     print(f"Saving {json_file.name}")
     print("\nSearch Completed!")
@@ -859,11 +873,8 @@ def get_pxc_contracts():
             if outputFormat == 1 or outputFormat == 2:
                 if items is not None:
                     if len(items) > 0:
-                        with open(json_output_dir +
-                                  "Contracts" +
-                                  "_Page_" + str(page) +
-                                  "_of_" + str(pages) +
-                                  ".json", 'w') as json_file:
+                        with open(json_output_dir + 
+                                  PageOfFileName("Contracts", page, pages), 'w') as json_file:
                             json.dump(items, json_file)
                             print(f"Saving {json_file.name}")
 
@@ -982,11 +993,8 @@ def get_pxc_contractswithcustomers():
             if outputFormat == 1 or outputFormat == 2:
                 if items is not None:
                     if len(items) > 0:
-                        with open(json_output_dir +
-                                  "ContractsWithNames" +
-                                  "_Page_" + str(page) +
-                                  "_of_" + str(pages) +
-                                  ".json", 'w') as json_file:
+                        with open(json_output_dir + 
+                                  PageOfFileName("ContractsWithNames", page, pages), 'w') as json_file:
                             json.dump(items, json_file)
                             print(f"Saving {json_file.name}")
     if debug_level == 1 or debug_level == 2:
@@ -1025,12 +1033,25 @@ def get_pxc_contracts_details():
                          "instanceNumber"
             writer = csv.writer(target, delimiter=' ', quotechar=' ', quoting=csv.QUOTE_NONE)
             writer.writerow(CSV_Header.split())
+
     with open(csv_output_dir + 'unique_contracts.csv', 'r') as target:
         contractList = csv.DictReader(target)
         for row in contractList:
             token_time_check()
-            customerName = row["customerName"].replace(",", " ")
-            contractNumber = row["contractNumber"]
+
+            try:
+                customerName = row["customerName"].replace(",", " ")
+            except KeyError:
+                print("No customerName for Row:", row) 
+                customerName = "None"
+                pass
+
+            try:
+                contractNumber = row["contractNumber"]
+            except KeyError:
+                print("No contractNumber for Row:", row) 
+                continue
+
             headers = {'Authorization': f'Bearer {token}'}
             url = (pxc_url_contracts_details +
                    "?contractNumber=" + contractNumber +
@@ -1038,15 +1059,9 @@ def get_pxc_contracts_details():
                    )
             print(f"\nScanning {customerName}")
             response = px_api_request("GET", url, headers, payload)
-            reply = json.loads(response.text)
-            if debug_level == 2:
-                print("\nURL Request:", url,
-                      "\nHTTP Code:", response.status_code,
-                      "\nReview API Headers:", response.headers,
-                      "\nResponse Body:", response.content,
-                      "\n====================")
+
             try:
-                if response.status_code == 200:
+                if response and response.status_code == 200:
                     totalCount = reply["totalCount"]
                     pages = math.ceil(totalCount / int(max_items))
                     if debug_level == 2:
@@ -1057,13 +1072,13 @@ def get_pxc_contracts_details():
                               "\nReview API Headers:", response.headers,
                               "\nResponse Body:", response.content,
                               "\n====================")
-                    page = 0
+                    page = 1
                     if totalCount > 0:
                         print(f"Found contract number {contractNumber}")
                     if totalCount < 1:
                         print(f"No details found for contract number {contractNumber}")
-                    while page < pages:
-                        off_set = (page * int(max_items))
+                    while page <= pages:
+                        off_set = ((page + 1) * int(max_items))
                         url = (pxc_url_contracts_details +
                                "?contractNumber=" + contractNumber +
                                "&offset=" + str(off_set) +
@@ -1073,11 +1088,9 @@ def get_pxc_contracts_details():
                         if outputFormat == 1 or outputFormat == 2:
                             if items is not None:
                                 if len(items) > 0:
-                                    json_file = (json_output_dir + customerName.replace('/', '-') +
-                                                 "_Contract_Details_" + contractNumber +
-                                                 "_Page_" + str(page + 1) +
-                                                 "_of_" + str(pages) +
-                                                 ".json")
+                                    page_name = "_Contract_Details_" + contractNumber
+                                    json_file = (json_output_dir + WindowsFileName(customerName) +
+                                                 PageOfFileName(page_name, page, pages))
                                     if not os.path.isfile(json_file):
                                         with open(json_file, 'w') as fileTarget:
                                             json.dump(items, fileTarget)
@@ -1448,8 +1461,7 @@ def get_pxc_successtracks():
                 if outputFormat == 1 or outputFormat == 2:
                     if items is not None:
                         if len(items) > 0:
-                            with open(json_output_dir + "SuccessTracks.json",
-                                      'w') as json_file:
+                            with open(json_output_dir + "SuccessTracks.json", 'w') as json_file:
                                 json.dump(items, json_file)
                             print(f"Saving {json_file.name}")
             else:
@@ -3527,7 +3539,7 @@ def pxc_software_groups():
                     if outputFormat == 1 or outputFormat == 2:
                         if items is not None:
                             if len(items) > 0:
-                                with open(json_output_dir + customerName + "_SoftwareGroups.json",
+                                with open(json_output_dir + WindowsFileName(customerName) + "_SoftwareGroups.json",
                                           'w') as json_file:
                                     json.dump(items, json_file)
                                 print(f"Saving {json_file.name}")
@@ -3703,7 +3715,7 @@ def pxc_software_group_suggestions():
                 finally:
                     if outputFormat == 1 or outputFormat == 2:
                         if not jsonDump == []:
-                            with open(json_output_dir + customerName + "_SoftwareGroup_Suggestions_" + successTrackId
+                            with open(json_output_dir + WindowsFileName(customerName) + "_SoftwareGroup_Suggestions_" + successTrackId
                                       + "_" + suggestionId + ".json", 'w') as json_file:
                                 json.dump(jsonDump, json_file)
                             print(f"Saving {json_file.name}")
@@ -4133,22 +4145,20 @@ def pxc_software_group_suggestions_bug_list():
                               "\nHTTP Code:", response.status_code,
                               "\nReview API Headers:", response.headers,
                               "\nResponse Body:", response.content)
-                    page = 0
-                    while page < pages:
+                    page = 1
+                    while page <= pages:
                         url = (pxc_url_customers + "/" +
                                customerId +
                                pxc_url_software_group_suggestions_bugs +
-                               "?offset=" + str(page + 1) +
+                               "?offset=" + str(page) +
                                "&max=" + max_items +
                                "&machineSuggestionId=" + machineSuggestionId +
                                "&successTrackId=" + successTrackId)
                         items = (get_json_reply(url, tag="items"))
                         if outputFormat == 1 or outputFormat == 2:
-                            with open(json_output_dir + customerName +
-                                      "_SoftwareGroup_Suggestions_Bug_Lists_" + machineSuggestionId +
-                                      "_Page_" + str(page + 1) +
-                                      "_of_" + str(pages) +
-                                      ".json", 'w') as json_file:
+                            page_name = "_SoftwareGroup_Suggestions_Bug_Lists_" + machineSuggestionId
+                            with open(json_output_dir + WindowsFileName(customerName) +
+                                      PageOfFileName(page_name, page, pages), 'w') as json_file:
                                 json.dump(items, json_file)
                                 print(f"Saving {json_file.name}")
                         if outputFormat == 1 or outputFormat == 3:
@@ -4247,12 +4257,12 @@ def pxc_software_group_suggestions_field_notices():
                               "\nHTTP Code:", response.status_code,
                               "\nReview API Headers:", response.headers,
                               "\nResponse Body:", response.content)
-                    page = 0
-                    while page < pages:
+                    page = 1
+                    while page <= pages:
                         url = (pxc_url_customers + "/" +
                                customerId +
                                pxc_url_software_group_suggestions_field_notices +
-                               "?offset=" + str(page + 1) +
+                               "?offset=" + str(page) +
                                "&max=" + max_items +
                                "&machineSuggestionId=" + machineSuggestionId +
                                "&successTrackId=" + successTrackId)
@@ -4262,11 +4272,9 @@ def pxc_software_group_suggestions_field_notices():
                         if outputFormat == 1 or outputFormat == 2:
                             if items is not None:
                                 if len(items) > 0:
+                                    page_name = "_SoftwareGroup_Suggestions_Field_Notices_" + machineSuggestionId
                                     with open(json_output_dir + customerId +
-                                              "_SoftwareGroup_Suggestions_Field_Notices_" + machineSuggestionId +
-                                              "_Page_" + str(page + 1) +
-                                              "_of_" + str(pages) +
-                                              ".json", 'w') as json_file:
+                                              PageOfFileName(page_name, page, pages), 'w') as json_file:
                                         json.dump(items, json_file)
                                     print(f"Saving {json_file.name}")
                         if outputFormat == 1 or outputFormat == 3:
@@ -4364,12 +4372,12 @@ def pxc_software_group_suggestions_advisories():
                               "\nHTTP Code:", response.status_code,
                               "\nReview API Headers:", response.headers,
                               "\nResponse Body:", response.content)
-                    page = 0
-                    while page < pages:
+                    page = 1
+                    while page <= pages:
                         url = (pxc_url_customers + "/" +
                                customerId +
                                pxc_url_software_group_suggestions_security_advisories +
-                               "?offset=" + str(page + 1) +
+                               "?offset=" + str(page) +
                                "&max=" + max_items +
                                "&machineSuggestionId=" + machineSuggestionId +
                                "&successTrackId=" + successTrackId)
@@ -4379,11 +4387,9 @@ def pxc_software_group_suggestions_advisories():
                         if outputFormat == 1 or outputFormat == 2:
                             if items is not None:
                                 if len(items) > 0:
+                                    page_name = "_Security_Advisories_" + machineSuggestionId
                                     with open(json_output_dir + customerId +
-                                              "_Security_Advisories_" + machineSuggestionId +
-                                              "_Page_" + str(page + 1) +
-                                              "_of_" + str(pages) +
-                                              ".json", 'w') as json_file:
+                                              PageOfFileName(page_name, page, pages), 'w') as json_file:
                                         json.dump(items, json_file)
                                     print(f"Saving {json_file.name}")
                             else:
@@ -4766,7 +4772,7 @@ def pxc_compliance_violations():
                        "&max=" + max_items)
                 response = px_api_request("GET", url, headers, payload)
                 reply = json.loads(response.text)
-                page = 0
+                page = 1
                 try:
                     print(f"\nFound Compliance Violations for {customerName} on Success Track {successTrackId}")
                     if response.status_code == 403:
@@ -4785,22 +4791,17 @@ def pxc_compliance_violations():
                                   "\nHTTP Code:", response.status_code,
                                   "\nReview API Headers:", response.headers,
                                   "\nResponse Body:", response.content)
-                        while page < pages:
-                            url = (pxc_url_customers + "/" +
-                                   customerId +
-                                   pxc_url_compliance_violations +
-                                   "?offset=" + str(page + 1) +
-                                   "&max=" + max_items +
+                        while page <= pages:
+                            url = (pxc_url_customers + "/" + customerId + pxc_url_compliance_violations +
+                                   "?offset=" + str(page) + "&max=" + max_items +
                                    "&successTrackId=" + successTrackId)
                             items = (get_json_reply(url, tag="items"))
                             if outputFormat == 1 or outputFormat == 2:
                                 if items is not None:
                                     if len(items) > 0:
+                                        page_name = "_Regulatory_Compliance_Violations_" + successTrackId
                                         with open(json_output_dir + customerId +
-                                                  "_Regulatory_Compliance_Violations_" + successTrackId +
-                                                  "_Page_" + str(page + 1) +
-                                                  "_of_" + str(pages) +
-                                                  ".json", 'w') as json_file:
+                                                  PageOfFileName(page_name, page, pages), 'w') as json_file:
                                             json.dump(items, json_file)
                                         print(f"Saving {json_file.name}")
                             if outputFormat == 1 or outputFormat == 3:
@@ -4917,10 +4918,9 @@ def pxc_assets_violating_compliance_rule():
             if outputFormat == 1 or outputFormat == 2:
                 if items is not None:
                     if len(items) > 0:
+                        page_name = "_Assets_Violating_Compliance_Rule_" + successTrackId
                         with open(json_output_dir + customerId +
-                                  "_Assets_Violating_Compliance_Rule_" + successTrackId +
-                                  "_Page_" + str(fileNum) +
-                                  ".json", 'w') as json_file:
+                                  PageFileName(page_name, fileNum), 'w') as json_file:
                             json.dump(items, json_file)
                         print(f"Saving {json_file.name}")
             if outputFormat == 1 or outputFormat == 3:
@@ -5057,10 +5057,9 @@ def pxc_compliance_rule_details():
                 items = []
             finally:
                 if outputFormat == 1 or outputFormat == 2:
+                    page_name = "_Policy_Rule_Details_" + successTrackId
                     with open(json_output_dir + customerId +
-                              "_Policy_Rule_Details_" + successTrackId +
-                              "_Page_" + str(fileNum) +
-                              ".json", 'w') as json_file:
+                              PageFileName(page_name, fileNum), 'w') as json_file:
                         json.dump(items, json_file)
                         print(f"Saving {json_file.name}")
                 if outputFormat == 1 or outputFormat == 3:
@@ -5169,9 +5168,9 @@ def pxc_compliance_suggestions():
                         if items is not None:
                             if len(items) > 0:
                                 if outputFormat == 1 or outputFormat == 2:
+                                    file_name = "_Compliance_Suggestions_" + successTrackId
                                     with open(json_output_dir + customerId +
-                                              "_Compliance_Suggestions_" + successTrackId + "_Page_" + str(fileNum) +
-                                              ".json", 'w') as json_file:
+                                              PageFileName(page_name, fileNum), 'w') as json_file:
                                         json.dump(items, json_file)
                                     print(f"Saving {json_file.name}")
                                 if outputFormat == 1 or outputFormat == 3:
@@ -5269,9 +5268,10 @@ def pxc_assets_with_violations():
                 if outputFormat == 1 or outputFormat == 2:
                     if items is not None:
                         if len(items) > 0:
+                            page_name = "_Assets_with_Violations_" + successTrackId
                             with open(
-                                    json_output_dir + customerId + "_Assets_with_Violations_" + successTrackId +
-                                    "_Page_" + str(fileNum) + ".json", 'w') as json_file:
+                                    json_output_dir + customerId +
+                                    PageFileName(page_name, fileNum), 'w') as json_file:
                                 json.dump(items, json_file)
                             print(f"Saving {json_file.name}")
                 if outputFormat == 1 or outputFormat == 3:
@@ -5381,10 +5381,9 @@ def pxc_asset_violations():
             if outputFormat == 1 or outputFormat == 2:
                 if items is not None:
                     if len(items) > 0:
-                        with open(json_output_dir + customerId +
-                                  "_Asset_Violations_" + sourceSystemId +
-                                  "_Page_" + str(fileNum) +
-                                  ".json", 'w') as json_file:
+                        page_name = "_Asset_Violations_" + sourceSystemId
+                        with open(json_output_dir + customerId + 
+                                  PageFileName(page_name, fileNum), 'w') as json_file:
                             json.dump(items, json_file)
                         print(f"Saving {json_file.name}")
             try:
