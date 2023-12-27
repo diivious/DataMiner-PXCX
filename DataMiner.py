@@ -343,8 +343,7 @@ def PageOfFileName(page_name, page, total):
 def px_api_exception(e):
     if (debug_level == 1 or debug_level == 2) and hasattr(e, 'request') and e.request:
         # Print details of the request that caused the exception
-        print("Request URL:", e.request.url)
-        print("Request Method:", e.request.method)
+        print(f"{e.request.method} Request URL: {e.request.url}")
         if debug_level == 2:
             print("Request Headers:", e.request.headers)
             print("Request Body:", e.request.body)
@@ -358,7 +357,6 @@ def px_api_exception(e):
 
 #
 # function to contain the error logic for any API request call
-#    TBD: use *kwargs and get rid of if method
 def px_api_request(method, url, headers, payload):
     global token
     firstTime = True
@@ -384,20 +382,18 @@ def px_api_request(method, url, headers, payload):
     session.mount('http://', adapter)
 
     # Rather Chatty ...
-    if debug_level == 2:
+    if debug_level == 1:
         caller = inspect.currentframe().f_back.f_code.co_name
-        print("{caller}: Request URL:", url,
-              "\nReport details:", data_payload,
-              "\nHTTP Code:", response.status_code,
-              "\nReview API Headers:", response.headers,
-              "\nResponse Body:", response.content)
+        print("Caller:", caller,
+              method,
+              "URL:", url)
 
     while True:
         try:
             if method == "GET":
-                response = requests.request(method, url, headers=headers, verify=True, timeout=10)
+                response = requests.request(method, url, headers=headers, verify=True, timeout=20)
             else:
-                response = requests.request(method, url, headers=headers, data=payload, verify=True, timeout=10)
+                response = requests.request(method, url, headers=headers, data=payload, verify=True, timeout=20)
 
             response.raise_for_status()  # Raise an HTTPError for bad responses (4xx and 5xx)
             if tries >= 2:
@@ -405,16 +401,16 @@ def px_api_request(method, url, headers, payload):
             return response
 
         except requests.exceptions.ReadTimeout as e:
-            print(f"ReadTimeoutError: Attempt {tries}: {e}")
+            print(f"ReadTimeoutError: Method:{method} Attempt:{tries}: {e}")
             px_api_exception(e)
         except requests.exceptions.Timeout as e:
-            print(f"TimeoutError: Attempt {tries}: {e}")
+            print(f"TimeoutError: Method:{method} Attempt:{tries}: {e}")
             px_api_exception(e)
         except ConnectionError as e:
-            print(f"ConnectionError: Attempt {tries}: {e}")
+            print(f"ConnectionError: Method:{method} Attempt:{tries}: {e}")
             px_api_exception(e)
         except requests.exceptions.HTTPError as e:
-            print(f"HTTPError: Attempt {tries}: {e}")
+            print(f"HTTPError: Method:{method} Attempt:{tries}: {e}")
             px_api_exception(e)
             if response.status_code >= 500:
                 print("Server Error: Retrying API call")
@@ -428,10 +424,10 @@ def px_api_request(method, url, headers, payload):
                 response = []
                 break
         except requests.exceptions.RequestException as e:
-            print(f"RequestException: Attempt {tries}: {e}")
+            print(f"RequestException: Method:{method} Attempt:{tries}: {e}")
             px_api_exception(e)
         except Exception as e:
-            print(f"Unexpected error: Attempt {tries}: {e}")
+            print(f"Unexpected error: Method:{method} Attempt:{tries}: {e}")
             px_api_exception(e)
         finally:
             if token:
@@ -1038,12 +1034,13 @@ def get_pxc_contracts_details():
         contractList = csv.DictReader(target)
         for row in contractList:
             token_time_check()
+            customerName = "None"
+            contractNumber = "None"
 
             try:
                 customerName = row["customerName"].replace(",", " ")
             except KeyError:
                 print("No customerName for Row:", row) 
-                customerName = "None"
                 pass
 
             try:
@@ -1059,18 +1056,19 @@ def get_pxc_contracts_details():
                    )
             print(f"\nScanning {customerName}")
             response = px_api_request("GET", url, headers, payload)
+            if response and hasattr(response, 'text'):
+                reply = json.loads(response.text)
+            else:
+                print("Contract Details missing response.. continuing")
+                continue
 
             try:
-                if response and response.status_code == 200:
+                if response.status_code == 200:
                     totalCount = reply["totalCount"]
                     pages = math.ceil(totalCount / int(max_items))
                     if debug_level == 2:
                         print("\nTotal Pages:", pages,
                               "\nTotal Records: ", totalCount,
-                              "\nURL Request:", url,
-                              "\nHTTP Code:", response.status_code,
-                              "\nReview API Headers:", response.headers,
-                              "\nResponse Body:", response.content,
                               "\n====================")
                     page = 1
                     if totalCount > 0:
@@ -1558,15 +1556,14 @@ def pxc_assets_reports():
                 data_payload = json.dumps({"reportName": "Assets", "successTrackId": successTrackId})
                 headers = {'Authorization': f'Bearer {token}'}
                 response = px_api_request("POST", url, headers, data_payload)
-                if debug_level == 2:
-                    print("Report request URL:", url,
-                          "\nReport details:", data_payload,
-                          "\nHTTP Code:", response.status_code,
-                          "\nReview API Headers:", response.headers,
-                          "\nResponse Body:", response.content)
+                if not response:
+                    print("Asset Report missing response.. continuing")
+                    continue
+
                 if response.text.__contains__("Customer admin has not provided access."):
                     print("Customer admin has not provided access.")
-                if not (response.text.__contains__("Customer admin has not provided access.")):
+
+                else:
                     try:
                         if bool(response.headers["location"]) is True:
                             pass
@@ -1606,11 +1603,6 @@ def pxc_assets_reports():
                         filename = (temp_dir + customerId + "_Assets_" + location.split('/')[-1] + '.zip')
                         headers = {'Authorization': f'Bearer {token}'}
                         response = px_api_request("GET", location, headers, payload)
-                        if debug_level == 2:
-                            print("\nLocation URL Returned:", location,
-                                  "\nHTTP Code:", response.status_code,
-                                  "\nReview API Headers:", response.headers,
-                                  "\nResponse Body:", response.content, "\nWait Time:", tries)
                         try:
                             with open(filename, 'wb') as file:
                                 file.write(response.content)
@@ -1915,12 +1907,10 @@ def pxc_hardware_reports():
                 data_payload = json.dumps({"reportName": "hardware", "successTrackId": successTrackId})
                 headers = {'Authorization': f'Bearer {token}'}
                 response = px_api_request("POST", url, headers, data_payload)
-                if debug_level == 2:
-                    print("Report request URL:", url,
-                          "\nReport details:", data_payload,
-                          "\nHTTP Code:", response.status_code,
-                          "\nReview API Headers:", response.headers,
-                          "\nResponse Body:", response.content)
+                if not response:
+                    print("Hardware Report missing response.. continuing")
+                    continue
+
                 if response.text.__contains__("Customer admin has not provided access."):
                     print(f"Customer admin has not provided access on Success Track {successTrackId}")
                 if not (response.text.__contains__("Customer admin has not provided access.")):
@@ -1933,11 +1923,7 @@ def pxc_hardware_reports():
                         print("\n!!!!!!!!\nException Thrown for", "Customer:", customerName,
                               "on Success Track ", successTrackId,
                               "Report Failed to Download\n")
-                        print("Report request URL:", url,
-                              "\nReport details:", data_payload,
-                              "\nHTTP Code:", response.status_code,
-                              "\nReview API Headers:", response.headers,
-                              "\nResponse Body:", response.content)
+
                         while response.status_code >= 400:
                             print(f"Pausing for {wait_time} seconds before re-request...")
                             time.sleep(wait_time)
@@ -1946,11 +1932,6 @@ def pxc_hardware_reports():
                             print("URL: ", url)
                             print("Data Payload: ", data_payload)
                             response = px_api_request("POST", url, headers, data_payload)
-                            print("Report request URL:", url,
-                                  "\nReport details:", data_payload,
-                                  "\nHTTP Code:", response.status_code,
-                                  "\nReview API Headers:", response.headers,
-                                  "\nResponse Body:", response.content)
                             print(f"Review for  {customerName} on Success Track {successTrackId} "
                                   f"Report Failed to Download\n")
                     location = response.headers["location"]
@@ -1963,11 +1944,7 @@ def pxc_hardware_reports():
                         filename = (temp_dir + location.split('/')[-1] + '.zip')
                         headers = {'Authorization': f'Bearer {token}'}
                         response = px_api_request("GET", location, headers, payload)
-                        if debug_level == 2:
-                            print("\nLocation URL Returned:", location,
-                                  "\nHTTP Code:", response.status_code,
-                                  "\nReview API Headers:", response.headers,
-                                  "\nResponse Body:", response.content, "\nWait Time:", tries)
+
                         try:
                             with open(filename, 'wb') as file:
                                 file.write(response.content)
@@ -2147,15 +2124,14 @@ def pxc_software_reports():
                 data_payload = json.dumps({"reportName": "software", "successTrackId": successTrackId})
                 headers = {'Authorization': f'Bearer {token}'}
                 response = px_api_request("POST", url, headers, data_payload)
-                if debug_level == 2:
-                    print("Report request URL:", url,
-                          "\nReport details:", data_payload,
-                          "\nHTTP Code:", response.status_code,
-                          "\nReview API Headers:", response.headers,
-                          "\nResponse Body:", response.content)
+                if not response:
+                    print("Software Report missing response.. continuing")
+                    continue
+
                 if response.text.__contains__("Customer admin has not provided access."):
                     print(f"Customer admin has not provided access on Success Track {successTrackId}")
-                if not (response.text.__contains__("Customer admin has not provided access.")):
+
+                else:
                     try:
                         if bool(response.headers["location"]) is True:
                             pass
@@ -2178,11 +2154,6 @@ def pxc_software_reports():
                             print("URL: ", url)
                             print("Data Payload: ", data_payload)
                             response = px_api_request("POST", url, headers, data_payload)
-                            print("Report request URL:", url,
-                                  "\nReport details:", data_payload,
-                                  "\nHTTP Code:", response.status_code,
-                                  "\nReview API Headers:", response.headers,
-                                  "\nResponse Body:", response.content)
                             print("Review for", "Customer:", customerName, "on Success Track ", successTrackId,
                                   "Report Failed to Download\n")
                     location = response.headers["location"]
@@ -2195,7 +2166,7 @@ def pxc_software_reports():
                         filename = (temp_dir + location.split('/')[-1] + '.zip')
                         headers = {'Authorization': f'Bearer {token}'}
                         response = px_api_request("GET", location, headers, payload)
-                        if debug_level == 2:
+                        if response and debug_level == 2:
                             print("\nLocation URL Returned:", location,
                                   "\nHTTP Code:", response.status_code,
                                   "\nReview API Headers:", response.headers,
@@ -2355,15 +2326,14 @@ def pxc_purchased_licenses_reports():
                 data_payload = json.dumps({"reportName": "PurchasedLicenses", "successTrackId": successTrackId})
                 headers = {'Authorization': f'Bearer {token}'}
                 response = px_api_request("POST", url, headers, data_payload)
-                if debug_level == 2:
-                    print("Report request URL:", url,
-                          "\nReport details:", data_payload,
-                          "\nHTTP Code:", response.status_code,
-                          "\nReview API Headers:", response.headers,
-                          "\nResponse Body:", response.content)
+                if not response:
+                    print("Purchased License Report missing response.. continuing")
+                    continue
+
                 if response.text.__contains__("Customer admin has not provided access."):
                     print(f"Customer admin has not provided access on Success Track {successTrackId}")
-                if not (response.text.__contains__("Customer admin has not provided access.")):
+
+                else:
                     try:
                         if bool(response.headers["location"]) is True:
                             pass
@@ -2403,11 +2373,7 @@ def pxc_purchased_licenses_reports():
                         filename = (temp_dir + location.split('/')[-1] + '.zip')
                         headers = {'Authorization': f'Bearer {token}'}
                         response = px_api_request("GET", location, headers, payload)
-                        if debug_level == 2:
-                            print("\nLocation URL Returned:", location,
-                                  "\nHTTP Code:", response.status_code,
-                                  "\nReview API Headers:", response.headers,
-                                  "\nResponse Body:", response.content, "\nWait Time:", tries)
+
                         try:
                             with open(filename, 'wb') as file:
                                 file.write(response.content)
@@ -2556,15 +2522,13 @@ def pxc_licenses_reports():
                 data_payload = json.dumps({"reportName": "Licenses", "successTrackId": successTrackId})
                 headers = {'Authorization': f'Bearer {token}'}
                 response = px_api_request("POST", url, headers, data_payload)
-                if debug_level == 2:
-                    print("Report request URL:", url,
-                          "\nReport details:", data_payload,
-                          "\nHTTP Code:", response.status_code,
-                          "\nReview API Headers:", response.headers,
-                          "\nResponse Body:", response.content)
+                if not response:
+                    print("License Report missing response.. continuing")
+                    continue
+
                 if response.text.__contains__("Customer admin has not provided access."):
                     print(f"Customer admin has not provided access on Success Track {successTrackId}")
-                if not (response.text.__contains__("Customer admin has not provided access.")):
+                else:
                     try:
                         if bool(response.headers["location"]) is True:
                             pass
@@ -2604,11 +2568,6 @@ def pxc_licenses_reports():
                         filename = (temp_dir + location.split('/')[-1] + '.zip')
                         headers = {'Authorization': f'Bearer {token}'}
                         response = px_api_request("GET", location, headers, payload)
-                        if debug_level == 2:
-                            print("\nLocation URL Returned:", location,
-                                  "\nHTTP Code:", response.status_code,
-                                  "\nReview API Headers:", response.headers,
-                                  "\nResponse Body:", response.content, "\nWait Time:", tries)
 
                         try:
                             with open(filename, 'wb') as file:
@@ -2786,15 +2745,13 @@ def pxc_security_advisories_reports():
                 data_payload = json.dumps({"reportName": "securityadvisories", "successTrackId": successTrackId})
                 headers = {'Authorization': f'Bearer {token}'}
                 response = px_api_request("POST", url, headers, data_payload)
-                if debug_level == 2:
-                    print("Report request URL:", url,
-                          "\nReport details:", data_payload,
-                          "\nHTTP Code:", response.status_code,
-                          "\nReview API Headers:", response.headers,
-                          "\nResponse Body:", response.content)
+                if not response:
+                    print("Security Advisories missing response.. continuing")
+                    continue
+
                 if response.text.__contains__("Customer admin has not provided access."):
                     print(f"Customer admin has not provided access on Success Track {successTrackId}")
-                if not (response.text.__contains__("Customer admin has not provided access.")):
+                else:
                     try:
                         if bool(response.headers["location"]) is True:
                             pass
@@ -2834,11 +2791,7 @@ def pxc_security_advisories_reports():
                         filename = (temp_dir + location.split('/')[-1] + '.zip')
                         headers = {'Authorization': f'Bearer {token}'}
                         response = px_api_request("GET", location, headers, payload)
-                        if debug_level == 2:
-                            print("\nLocation URL Returned:", location,
-                                  "\nHTTP Code:", response.status_code,
-                                  "\nReview API Headers:", response.headers,
-                                  "\nResponse Body:", response.content, "\nWait Time:", tries)
+
                         try:
                             with open(filename, 'wb') as file:
                                 file.write(response.content)
@@ -3010,15 +2963,13 @@ def pxc_field_notices_reports():
                 data_payload = json.dumps({"reportName": "FieldNotices", "successTrackId": successTrackId})
                 headers = {'Authorization': f'Bearer {token}'}
                 response = px_api_request("POST", url, headers, data_payload)
-                if debug_level == 2:
-                    print("Report request URL:", url,
-                          "\nReport details:", data_payload,
-                          "\nHTTP Code:", response.status_code,
-                          "\nReview API Headers:", response.headers,
-                          "\nResponse Body:", response.content)
+                if not response:
+                    print("Feild Notices Report missing response.. continuing")
+                    continue
+
                 if response.text.__contains__("Customer admin has not provided access."):
                     print(f"Customer admin has not provided access on Success Track {successTrackId}")
-                if not (response.text.__contains__("Customer admin has not provided access.")):
+                else:
                     try:
                         if bool(response.headers["location"]) is True:
                             pass
@@ -3058,11 +3009,7 @@ def pxc_field_notices_reports():
                         filename = (temp_dir + location.split('/')[-1] + '.zip')
                         headers = {'Authorization': f'Bearer {token}'}
                         response = px_api_request("GET", location, headers, payload)
-                        if debug_level == 2:
-                            print("\nLocation URL Returned:", location,
-                                  "\nHTTP Code:", response.status_code,
-                                  "\nReview API Headers:", response.headers,
-                                  "\nResponse Body:", response.content, "\nWait Time:", tries)
+
                         try:
                             with open(filename, 'wb') as file:
                                 file.write(response.content)
@@ -3231,15 +3178,13 @@ def pxc_priority_bugs_reports():
                 data_payload = json.dumps({"reportName": "prioritybugs", "successTrackId": successTrackId})
                 headers = {'Authorization': f'Bearer {token}'}
                 response = px_api_request("POST", url, headers, data_payload)
-                if debug_level == 2:
-                    print("Report request URL:", url,
-                          "\nReport details:", data_payload,
-                          "\nHTTP Code:", response.status_code,
-                          "\nReview API Headers:", response.headers,
-                          "\nResponse Body:", response.content)
+                if not response:
+                    print("Priority Bugs Report missing response.. continuing")
+                    continue
+
                 if response.text.__contains__("Customer admin has not provided access."):
                     print(f"Customer admin has not provided access on Success Track {successTrackId}")
-                if not (response.text.__contains__("Customer admin has not provided access.")):
+                else:
                     try:
                         if bool(response.headers["location"]) is True:
                             pass
@@ -3278,11 +3223,7 @@ def pxc_priority_bugs_reports():
                         filename = (temp_dir + location.split('/')[-1] + '.zip')
                         headers = {'Authorization': f'Bearer {token}'}
                         response = px_api_request("GET", location, headers, payload)
-                        if debug_level == 2:
-                            print("\nLocation URL Returned:", location,
-                                  "\nHTTP Code:", response.status_code,
-                                  "\nReview API Headers:", response.headers,
-                                  "\nResponse Body:", response.content, "\nWait Time:", tries)
+
                         try:
                             with open(filename, 'wb') as file:
                                 file.write(response.content)
@@ -3696,7 +3637,12 @@ def pxc_software_group_suggestions():
                         'Authorization': f'Bearer {token}'
                     }
                     response = px_api_request("GET", url, headers)
-                    reply = json.loads(response.text)
+                    if response and hasattr(response, 'text'):
+                        reply = json.loads(response.text)
+                    else:
+                        print("Software Groups Reports missing response.. continuing")
+                        continue
+
                     if response.status_code == 200:
                         jsonDump = {'items': [reply]}
                         suggestionsInterval = str(reply['suggestionsInterval'])
@@ -3704,11 +3650,7 @@ def pxc_software_group_suggestions():
                         suggestionSelectedDate = str(reply['suggestionSelectedDate'])
                     else:
                         jsonDump = []
-                    if debug_level == 2:
-                        print("URL Request:", url,
-                              "\nHTTP Code:", response.status_code,
-                              "\nReview API Headers:", response.headers,
-                              "\nResponse Body:", response.content)
+
                 except Exception as Error:
                     print(Error)
                     jsonDump = []
@@ -4133,7 +4075,11 @@ def pxc_software_group_suggestions_bug_list():
                        "&machineSuggestionId=" + machineSuggestionId +
                        "&successTrackId=" + successTrackId)
             response = px_api_request("GET", url, headers, payload)
-            reply = json.loads(response.text)
+            if response and hasattr(response, 'text'):
+                reply = json.loads(response.text)
+            else:
+                print("Software Groups Suggestions Bugs List missing response.. continuing")
+                continue
             try:
                 if response.status_code == 200:
                     totalCount = reply["totalCount"]
@@ -4141,10 +4087,7 @@ def pxc_software_group_suggestions_bug_list():
                     if debug_level == 2:
                         print("\nTotal Pages:", pages,
                               "\nTotal Records: ", totalCount,
-                              "\nURL Request:", url,
-                              "\nHTTP Code:", response.status_code,
-                              "\nReview API Headers:", response.headers,
-                              "\nResponse Body:", response.content)
+                              "\n====================")
                     page = 1
                     while page <= pages:
                         url = (pxc_url_customers + "/" +
@@ -4245,7 +4188,12 @@ def pxc_software_group_suggestions_field_notices():
                        "&machineSuggestionId=" + machineSuggestionId +
                        "&successTrackId=" + successTrackId)
                 response = px_api_request("GET", url, headers, payload)
-                reply = json.loads(response.text)
+                if response and hasattr(response, 'text'):
+                    reply = json.loads(response.text)
+                else:
+                    print("Software Groups Suggestions Field Notice missing response.. continuing")
+                    continue
+
             try:
                 if response.status_code == 200:
                     totalCount = reply["totalCount"]
@@ -4360,7 +4308,12 @@ def pxc_software_group_suggestions_advisories():
                    "&machineSuggestionId=" + machineSuggestionId +
                    "&successTrackId=" + successTrackId)
             response = px_api_request("GET", url, headers, payload)
-            reply = json.loads(response.text)
+            if response and hasattr(response, 'text'):
+                reply = json.loads(response.text)
+            else:
+                print("Software Groups Suggestions Security Advisories missing response.. continuing")
+                continue
+
             try:
                 if response.status_code == 200:
                     totalCount = reply["totalCount"]
@@ -4771,7 +4724,12 @@ def pxc_compliance_violations():
                        "&days=30" +
                        "&max=" + max_items)
                 response = px_api_request("GET", url, headers, payload)
-                reply = json.loads(response.text)
+                if response and hasattr(response, 'text'):
+                    reply = json.loads(response.text)
+                else:
+                    print("Compliance Violations Report missing response.. continuing")
+                    continue
+
                 page = 1
                 try:
                     print(f"\nFound Compliance Violations for {customerName} on Success Track {successTrackId}")
@@ -5039,7 +4997,12 @@ def pxc_compliance_rule_details():
                     'Authorization': f'Bearer {token}'
                 }
                 response = px_api_requests("GET", url, headers, "")
-                reply = json.loads(response.text)
+                if response and hasattr(response, 'text'):
+                    reply = json.loads(response.text)
+                else:
+                    print("Compliance Rule Detail Report missing response.. continuing")
+                    continue
+
                 if response.status_code == 200:
                     items = {'items': [reply]}
                     policyName = str(reply['policyName'])
@@ -5047,11 +5010,7 @@ def pxc_compliance_rule_details():
                     ruleId = str(reply['ruleId'])
                     policyId = str(reply['policyId'])
                     print(f"Found Policy {policyName}")
-                if debug_level == 2:
-                    print("URL Request:", url,
-                          "\nHTTP Code:", response.status_code,
-                          "\nReview API Headers:", response.headers,
-                          "\nResponse Body:", response.content)
+
             except Exception as Error:
                 print(f"\nFailed to collect {Error} due to reply from API: ", reply['message'])
                 items = []
@@ -5138,9 +5097,12 @@ def pxc_compliance_suggestions():
                 print(f"Found Compliance Suggestions on Success Track {successTrackId} "
                       f"for {customerName}")
             response = px_api_request("GET", url, headers, payload)
-            reply = json.loads(response.text)
-            if debug_level == 1 or debug_level == 2:
-                print(reply)
+            if response and hasattr(response, 'text'):
+                reply = json.loads(response.text)
+            else:
+                print("Compliance Suggestions missing response.. continuing")
+                continue
+
             try:
                 if response.status_code == 200:
                     totalCount = reply["totalCount"]
@@ -5474,17 +5436,18 @@ def pxc_obtained():
                         'Authorization': f'Bearer {token}'
                     }
                     response = px_api_requests("GET", url, headers, "")
-                    reply = json.loads(response.text)
+                    if response and hasattr(response, 'text'):
+                        reply = json.loads(response.text)
+                    else:
+                        print("Compliance Obtained Report missing response.. continuing")
+                        continue
+
                     if response.status_code == 200:
                         if len(reply) > 0:
                             items = {'items': [reply]}
                             status = str(reply['status'])
                             hasQualifiedAssets = str(reply['hasQualifiedAssets'])
-                        if debug_level == 2:
-                            print("URL Request:", url,
-                                  "\nHTTP Code:", response.status_code,
-                                  "\nReview API Headers:", response.headers,
-                                  "\nResponse Body:", response.content)
+
                     if outputFormat == 1 or outputFormat == 2:
                         if len(items) > 0:
                             if items is not None:
@@ -5508,10 +5471,8 @@ def pxc_obtained():
                                     writer.writerow(CSV_Data.split())
                 except Exception as Error:
                     if response.text.__contains__("Customer admin has not provided access."):
-                        if debug_level == 2:
-                            print("\nResponse Body:", response.content)
-                            print(Error)
                         print("Customer admin has not provided access....Skipping")
+
     print("\nSearch Completed!")
     if debug_level == 1 or debug_level == 2:
         now = datetime.now()
