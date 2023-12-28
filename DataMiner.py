@@ -391,9 +391,9 @@ def px_api_request(method, url, headers, payload):
     while True:
         try:
             if method == "GET":
-                response = requests.request(method, url, headers=headers, verify=True, timeout=20)
+                response = requests.request(method, url, headers=headers, verify=True, timeout=10)
             else:
-                response = requests.request(method, url, headers=headers, data=payload, verify=True, timeout=20)
+                response = requests.request(method, url, headers=headers, data=payload, verify=True, timeout=10)
 
             response.raise_for_status()  # Raise an HTTPError for bad responses (4xx and 5xx)
             if tries >= 2:
@@ -415,7 +415,7 @@ def px_api_request(method, url, headers, payload):
             if response.status_code >= 500:
                 print("Server Error: Retrying API call")
             elif response.status_code == 401:
-                if FirstTime:
+                if firstTime:
                     # Unauthorized? lets see if a new token will help.. but only try once
                     get_pxc_token()
                     firstTiome = FALSE
