@@ -348,15 +348,14 @@ def PageOfFileName(page_name, page, total):
 def api_exception(e):
     if hasattr(e, 'request') and e.request:
         # Logging.Info details of the request that caused the exception
-        logging.debug(f"{e.request.method} Request URL: {e.request.url}")
-        logging.info("Request Headers:", e.request.headers)
-        logging.info("Request Body:", e.request.body)
+        logging.error(f"{e.request.method} Request URL: {e.request.url}")
+        logging.debug(f"Request Headers{e.request.headers}")
+        logging.debug(f"Request Body:{e.request.body}")
 
     if hasattr(e, 'response') and e.response:
-        # Logging.Info details of the response received before the timeout
-        logging.debug("Response Status Code:", e.response.status_code)
-        logging.info("Response Headers:", e.response.headers)
-        logging.info("Response Content:", e.response.text)
+        logging.error(f"Response Status Code:{e.response.status_code}")
+        logging.debug(f"Response Headers:{e.response.headers}")
+        logging.debug(f"Response Content:{e.response.text}")
 
 #
 # handle the send
@@ -393,7 +392,7 @@ def pxc_api_request(method, url, headers, payload=None):
     session.mount('http://', adapter)
 
     # Rather Chatty ...
-    logging.info(f"{method}: URL:{url}")
+    logging.debug(f"{method}: URL:{url}")
 
     while True:
         try:
@@ -403,22 +402,22 @@ def pxc_api_request(method, url, headers, payload=None):
                 logging.info("\nSuccess on retry! \nContinuing.")
             break
         except requests.exceptions.ReadTimeout as e:
-            logging.error(f"ReadTimeoutError: Method:{method} Attempt:{tries}: {e}")
+            logging.error(f"ReadTimeoutError: Method:{method} Attempt:{tries}")
             api_exception(e)
         except requests.exceptions.Timeout as e:
-            logging.error(f"TimeoutError: Method:{method} Attempt:{tries}: {e}")
+            logging.error(f"TimeoutError: Method:{method} Attempt:{tries}")
             api_exception(e)
         except ConnectionError as e:
-            logging.error(f"ConnectionError: Method:{method} Attempt:{tries}: {e}")
+            logging.error(f"ConnectionError: Method:{method} Attempt:{tries}")
             api_exception(e)
         except requests.exceptions.RequestException as e:
-            logging.error(f"RequestException: Method:{method} Attempt:{tries}: {e}")
+            logging.error(f"RequestException: Method:{method} Attempt:{tries}")
             api_exception(e)
         except Exception as e:
-            logging.error(f"Unexpected error: Method:{method} Attempt:{tries}: {e}")
+            logging.error(f"Unexpected error: Method:{method} Attempt:{tries}")
             api_exception(e)
         except requests.exceptions.HTTPError as e:
-            logging.error(f"HTTPError: Method:{method} Attempt:{tries}: {e}")
+            logging.error(f"HTTPError: Method:{method} Attempt:{tries}")
             api_exception(e)
             if response.status_code >= 500:
                 logging.info("Server Error: Retrying API call")
@@ -445,10 +444,10 @@ def pxc_refresh_token():
     checkTime = time.time()
     tokenTime = math.ceil(int(checkTime - tokenStartTime) / 60)
     if tokenTime > 99:
-        logging.debug(f"Token Time is :{tokenTime} minutes, Refreshing")
+        logging.info(f"Token Time is :{tokenTime} minutes, Refreshing")
         pxc_get_token()
     else:
-        logging.info(f"Token time is :{tokenTime} minutes")
+        logging.debug(f"Token time is :{tokenTime} minutes")
 
 
 # Function to get a valid API token from PX Cloud
@@ -476,8 +475,8 @@ def pxc_get_token():
     tokenStartTime = time.time()
     logging.info(f"API Token:{token}")
     if token:
-        logging.info("Done!")
-        logging.info("====================\n\n")
+        print("Done!")
+        print("====================\n\n")
 
     else: 
         logging.critical("Unable to retrieve a valid token\n"
@@ -5983,7 +5982,7 @@ if __name__ == '__main__':
         exit(1)
 
     # Set up logging based on the parsed log level
-    logging.basicConfig(level=log_level)
+    logging.basicConfig(format='%(levelname)s:%(funcName)s: %(message)s', level=log_level)
 
     # Your application code
     logger = logging.getLogger(__name__)
