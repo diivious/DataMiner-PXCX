@@ -400,7 +400,7 @@ def pxc_api_request(method, url, headers, payload=None):
             response = send_request(method, url, headers, payload)
             response.raise_for_status()  # Raise an HTTPError for bad responses (4xx and 5xx)
             if tries >= 2:
-                logging.info("\nSuccess on retry! \nContinuing.\n", end="")
+                logging.info("\nSuccess on retry! \nContinuing.")
             break
         except requests.exceptions.ReadTimeout as e:
             logging.error(f"ReadTimeoutError: Method:{method} Attempt:{tries}: {e}")
@@ -433,9 +433,8 @@ def pxc_api_request(method, url, headers, payload=None):
                 break
         finally:
             tries += 1
-            if tries % 100: pxc_get_token()	# been 100 tries, lets get a new token
-            else:pxc_refresh_token()		# check to see if token refresh is needed
-            time.sleep(2)			# 2 seconds delay before the next attempt
+            pxc_refresh_token()		# check to see if token refresh is needed
+            time.sleep(2)		# 2 seconds delay before the next attempt
 
         #End Try
     #End While
@@ -690,13 +689,17 @@ def get_json_reply(url, tag):
                 reply = json.loads(response.text)
                 items = reply[tag]
 
-                if response.status_code == 200 and len(items) > 0:
-                    if tries >= 2:
-                        print("\nSuccess on retry! \nContinuing.\n", end="")
-                    return items
-
+                try:
+                    if response.status_code == 200:
+                        if len(items) > 0:
+                            if tries >= 2:
+                                logging.info("\nSuccess on retry! \nContinuing.")
+                                return items
+                finally:
+                    if response.status_code == 200:
+                        return items
             else:
-                logging.error("\nEmpty response received. Retrying...\n", end="")
+                logging.error("\nEmpty response received. Retrying...\n")
             
         except Exception as Error:
             if response:
@@ -715,16 +718,14 @@ def get_json_reply(url, tag):
                 if tag == "items":
                     print("\nResponse Content:", response.content)
                     print("\nAttempt #", tries, "Failed getting:", Error,
-                          "\nRetrying in", wait_time, "seconds\n", end="")
-            else:
-                logging.warning("Failed to get JSON reply... Retrying")    
+                          "\nRetrying in", wait_time, "seconds\n")
+                    time.sleep(wait_time)
 
             if tries >= 3:
                 logging.warning("Failed to get JSON reply... Skipping")
                 break
         finally:
             tries += 1
-            time.sleep(wait_time)	# delay before the next attempt
 
 # Function to get the Customer List from PX Cloud
 # The objective of this API is to provide the list of all the customers
