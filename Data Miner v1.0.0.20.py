@@ -165,29 +165,21 @@ Version Features and enhancements
 
 """
 
-import base64
-import boto3
-import csv
-import json
-import inspect
-import math
-import os
-import re
 import requests
+import json
+import csv
+import os
 import shutil
-import sys
-import time
 import zipfile
-import logging
-import argparse
-#import cdm
-
+import time
+import sys
+import math
+import base64
+from configparser import ConfigParser
+import boto3
 from botocore.exceptions import ClientError
 from botocore.exceptions import NoCredentialsError
-from configparser import ConfigParser
 from datetime import datetime
-from requests.adapters import HTTPAdapter
-from requests.packages.urllib3.util.retry import Retry
 
 """
 Notes on Imports
@@ -202,9 +194,6 @@ sys for changing the output to log file
 math for rounding up to whole numbers
 boto3 for accessing the AWS S3 storage
 datetime for posting time stamps in the logging
-logging for debug and error notifications
-argparse for command line arguement parsing
-cdm for common Cisco DataMiner functions
 """
 
 # PXCloud settings
@@ -246,7 +235,7 @@ pxc_url_crash_risk_assets_last_crashed = pxc_url_crash_risk + "sCrashed"
 pxc_url_crash_risk_asset_crash_history = "/crashHistory"
 
 # Data File Variables
-codeVersion = str("1.0.0.20d")
+codeVersion = str("1.0.0.20")
 configFile = "config.ini"
 csv_output_dir = "outputcsv/"
 json_output_dir = "outputjson/"
@@ -316,211 +305,21 @@ log_to_file = 0  # send all screen logging to a file (1=True, 0=False) default i
 testLoop = 1  # test the code by running through the entire sequence x times. Default is 1
 outputFormat = 1  # generate output in the form of Both, JSON or CSV. 1=Both 2=JSON 3=CSV
 useProductionURL = 1  # if true, use production URL, if false, use sandbox URL (1=True 2=False) Default is 1
-
-'''
-Begin defining functions to move to cdm module
-=======================================================================
-'''
-#
-# Cleanup file name to be Windows compatable
-def WindowsFileName(json_filename):
-    # Define a pattern to match characters not allowed in Windows filenames
-    invalid_char_pattern = re.compile(r'[<>:"/\\|?* &\x00-\x1F]+')
-
-    # Replace invalid characters with an underscore
-    filename = invalid_char_pattern.sub('_', json_filename)
-    return filename
-
-#
-# JSON Naming Convention: <page_name>_Page_{page}.json
-def PageFileName(page_name, page):
-    filename = page_name + "_Page_" + str(page) + ".json"
-    return WindowsFileName(filename)
-
-#
-# JSON Naming Convention: <page_name>_Page_{page}_of_{total}.json
-def PageOfFileName(page_name, page, total):
-    filename = page_name + "_Page_" + str(page) + "_of_" + str(total) + ".json"
-    return WindowsFileName(filename)
-
-#
-# common error handling
-def api_exception(e):
-    if hasattr(e, 'request') and e.request:
-        # Logging.Info details of the request that caused the exception
-        logging.debug(f"{e.request.method} Request URL: {e.request.url}")
-        logging.info("Request Headers:", e.request.headers)
-        logging.info("Request Body:", e.request.body)
-
-    if hasattr(e, 'response') and e.response:
-        # Logging.Info details of the response received before the timeout
-        logging.debug("Response Status Code:", e.response.status_code)
-        logging.info("Response Headers:", e.response.headers)
-        logging.info("Response Content:", e.response.text)
-
-#
-# handle the send
-def send_request(method, url, headers, payload=None):
-    if method == "GET":
-        return requests.get(url, headers=headers, verify=True, timeout=10)
-    else:
-        return requests.request(method, url, headers=headers, data=payload, verify=True, timeout=10)
-            
-#
-# function to contain the error logic for any API request call
-def pxc_api_request(method, url, headers, payload=None):
-    global token
-    firstTime = True
-    tries = 1
-    response = []
-
-    # Include all HTTP error codes (4xx and 5xx) in status_forcelist
-    all_error_codes = [code for code in range(400, 600)]
-
-    # Create a custom Retry object with max retries
-    retry_strategy = Retry(
-        total=30,		# Maximum number of retries
-        backoff_factor=0.1,	# Factor to apply between retry attempts
-        status_forcelist=all_error_codes,
-    )
-    
-    # Create a custom HTTPAdapter with the Retry strategy
-    adapter = HTTPAdapter(max_retries=retry_strategy)
-
-    # Create a Session and mount the custom adapter
-    session = requests.Session()
-    session.mount('https://', adapter)
-    session.mount('http://', adapter)
-
-    # Rather Chatty ...
-    logging.info(f"{method}: URL:{url}")
-
-    while True:
-        try:
-            response = send_request(method, url, headers, payload)
-            response.raise_for_status()  # Raise an HTTPError for bad responses (4xx and 5xx)
-            if tries >= 2:
-                logging.info("\nSuccess on retry! \nContinuing.\n", end="")
-            break
-        except requests.exceptions.ReadTimeout as e:
-            logging.error(f"ReadTimeoutError: Method:{method} Attempt:{tries}: {e}")
-            api_exception(e)
-        except requests.exceptions.Timeout as e:
-            logging.error(f"TimeoutError: Method:{method} Attempt:{tries}: {e}")
-            api_exception(e)
-        except ConnectionError as e:
-            logging.error(f"ConnectionError: Method:{method} Attempt:{tries}: {e}")
-            api_exception(e)
-        except requests.exceptions.RequestException as e:
-            logging.error(f"RequestException: Method:{method} Attempt:{tries}: {e}")
-            api_exception(e)
-        except Exception as e:
-            logging.error(f"Unexpected error: Method:{method} Attempt:{tries}: {e}")
-            api_exception(e)
-        except requests.exceptions.HTTPError as e:
-            logging.error(f"HTTPError: Method:{method} Attempt:{tries}: {e}")
-            api_exception(e)
-            if response.status_code >= 500:
-                logging.info("Server Error: Retrying API call")
-            elif response.status_code == 401 or response.status_code == 403:
-                if firstTime:
-                    # Unauthorized? lets see if a new token will help.. but only try once
-                    pxc_get_token()
-                    firstTiome = FALSE
-            elif response.status_code >= 400:
-                logging.error("Client Error: Aborting API call")
-                response = []
-                break
-        finally:
-            tries += 1
-            if tries % 100: pxc_get_token()	# been 100 tries, lets get a new token
-            else:pxc_refresh_token()		# check to see if token refresh is needed
-            time.sleep(2)			# 2 seconds delay before the next attempt
-
-        #End Try
-    #End While
-    return response
-
-# If needed, refresh the token so it does not expire
-def pxc_refresh_token():
-    checkTime = time.time()
-    tokenTime = math.ceil(int(checkTime - tokenStartTime) / 60)
-    if tokenTime > 99:
-        logging.debug(f"Token Time is :{tokenTime} minutes, Refreshing")
-        pxc_get_token()
-    else:
-        logging.info(f"Token time is :{tokenTime} minutes")
-
-
-# Function to get a valid API token from PX Cloud
-def pxc_get_token():
-    global token
-    global tokenStartTime
-    print("\nGetting PX Cloud Token")
-    url = (pxc_token_url
-           + "?grant_type=" + grant_type
-           + "&client_id=" + pxc_client_id
-           + "&client_secret=" + pxc_client_secret
-           + "&cache-control=" + pxc_cache_control
-           + "&scope=" + pxc_scope
-    )
-    headers = {
-        'Content-type': 'application/x-www-form-urlencoded'
-    }
-    response = requests.request("POST", url, headers=headers, data=payload)
-    if response:
-        reply = response.json()
-        token = reply.get("access_token", None)
-    else:
-        token = None
-        
-    tokenStartTime = time.time()
-    logging.info(f"API Token:{token}")
-    if token:
-        logging.info("Done!")
-        logging.info("====================\n\n")
-
-    else: 
-        logging.critical("Unable to retrieve a valid token\n"
-              "Check config.ini and ensure your API Keys and if your using the Sandbox or Production for accuracy")
-        logging.critical(f"Client ID: {pxc_client_id}")
-        logging.critical(f"Client Secret: {pxc_client_secret}")
-        logging.critical(f"Production APIs? : {useProductionURL}")
-        sys.exit()
-
-# Function to generate or clear output and temp folders for use.
-def pxc_storage(logfile=None):
-    # Both or JSON
-    if outputFormat == 1 or outputFormat == 2:
-        print("Saving data in JSON format")
-        if os.path.isdir(json_output_dir):
-            shutil.rmtree(json_output_dir)
-            os.mkdir(json_output_dir)
-        else:
-            os.mkdir(json_output_dir)
-
-    # Both or CSV
-    if outputFormat == 1 or outputFormat == 3:
-        print("Saving data in CSV format")
-        if os.path.isdir(csv_output_dir):
-            shutil.rmtree(csv_output_dir)
-            os.mkdir(csv_output_dir)
-        else:
-            os.mkdir(csv_output_dir)
-
-    if os.path.isdir(temp_dir):
-        shutil.rmtree(temp_dir)
-        os.mkdir(temp_dir)
-    else:
-        os.mkdir(temp_dir)
-
-    if logfile:
-        logging.basicConfig(format=fmt, level=logging.DEBUG, datefmt="%H:%M:%S", filename=logfile)
-
 '''
 Begin defining functions
 =======================================================================
 '''
+
+
+def token_time_check():
+    checkTime = time.time()
+    tokenTime = math.ceil(int(checkTime - tokenStartTime) / 60)
+    if debug_level == 1 or debug_level == 2:
+        print(f"Token time is :{tokenTime} minutes")
+    if tokenTime > 110:
+        get_pxc_token()
+
+
 def location_ready_status(location, headers):
     while True:
         print('Checking report ready status')
@@ -542,15 +341,8 @@ def proccess_sandbox_files(filename, customerid, reportid, json_filename):
             os.rename((temp_dir + jsonfile), (temp_dir + customerid + reportid + json_filename))
 
 
-# Function explain usage
-def usage():
-    print(f"Usage: python3 {sys.argv[0]} <customer> -log=<LOG_LEVEL>")
-    print(f"Args:")
-    print(f"   Optional named section for customer auth credentials.\n")
-    sys.exit()
-
 # Function to load configuration from config.ini and continue or create a template if not found and exit
-def load_config(customer):
+def load_config():
     global pxc_client_id
     global pxc_client_secret
     global s3access_key
@@ -568,32 +360,17 @@ def load_config(customer):
 
     config = ConfigParser()
     if os.path.isfile(configFile):
-        print('********************** CISCO PX Cloud Data Miner *********************\n')
-        print(f'********************* Minning Data for {customer} ********************\n')
+        print("******************************************************************")
+        print("****************** CISCO PX Cloud Data Miner *********************")
         print("******************************************************************")
         print('Config.ini file was found, continuing...')
         config.read(configFile)
-
-        # customer name cant be 'settings'
-        if customer == 'settings':
-            print(f"\nError: Customer name name can not be the resertved string 'settings'")
-            usage()
-
-        # check to see if credentials exist for a named customer.
-        # default customer config is 'credentials'
-        if not customer in config:
-            print(f"\nError: Credentials for Customer {customer} not found in config.ini")
-            usage()
-
-        # [credentials]
-        pxc_client_id = (config[customer]['pxc_client_id'])
-        pxc_client_secret = (config[customer]['pxc_client_secret'])
-        s3access_key = (config[customer]['s3access_key'])
-        s3access_secret = (config[customer]['s3access_secret'])
-        s3bucket_folder = (config[customer]['s3bucket_folder'])
-        s3bucket_name = (config[customer]['s3bucket_name'])
-
-        # [settings]
+        pxc_client_id = (config['credentials']['pxc_client_id'])
+        pxc_client_secret = (config['credentials']['pxc_client_secret'])
+        s3access_key = (config['credentials']['s3access_key'])
+        s3access_secret = (config['credentials']['s3access_secret'])
+        s3bucket_folder = (config['credentials']['s3bucket_folder'])
+        s3bucket_name = (config['credentials']['s3bucket_name'])
         wait_time = int((config['settings']["wait_time"]))
         pxc_fault_days = int((config['settings']["pxc_fault_days"]))
         max_items = (config['settings']["max_items"])
@@ -639,7 +416,7 @@ def load_config(customer):
         config.set("settings", "useProductionURL", "1")
         with open(configFile, 'w') as configfile:
             config.write(configfile)
-        sys.exit()
+        exit()
 
 
 # Function to upload all files in the output folders to AWS S3.
@@ -674,63 +451,144 @@ def s3_storage():
         print("====================\n\n")
 
 
+# Function to generate or clear output and temp folders for use.
+def temp_storage():
+    if os.path.isdir(csv_output_dir):
+        shutil.rmtree(csv_output_dir)
+        os.mkdir(csv_output_dir)
+    else:
+        os.mkdir(csv_output_dir)
+    if os.path.isdir(json_output_dir):
+        shutil.rmtree(json_output_dir)
+        if outputFormat == 1 or outputFormat == 2:
+            os.mkdir(json_output_dir)
+    else:
+        if outputFormat == 1 or outputFormat == 2:
+            os.mkdir(json_output_dir)
+
+    if os.path.isdir(temp_dir):
+        shutil.rmtree(temp_dir)
+        os.mkdir(temp_dir)
+    else:
+        os.mkdir(temp_dir)
+
+
+# Function to get a valid API token from PX Cloud
+def get_pxc_token():
+    global token
+    global tokenStartTime
+    print("\nGetting PX Cloud Token")
+    url = (
+            pxc_token_url + "?grant_type=" +
+            grant_type + "&client_id=" +
+            pxc_client_id + "&client_secret=" +
+            pxc_client_secret + "&cache-control=" +
+            pxc_cache_control + "&scope=" +
+            pxc_scope
+    )
+    headers = {
+        'Content-type': 'application/x-www-form-urlencoded'
+    }
+    response = requests.request("POST", url, headers=headers, data=payload)
+    reply = json.loads(response.text)
+    try:
+        token = (reply["access_token"])
+    except KeyError:
+        token = ""
+        pass
+    tokenStartTime = time.time()
+    if debug_level == 1 or debug_level == 2:
+        print(f"API Token:{token}")
+    if len(token) > 0:
+        print("Done!")
+        print("====================\n\n")
+    else:
+        print("Unable to retrieve a valid token\n"
+              "Check config.ini and ensure your API Keys and if your using the Sandbox or Production for accuracy")
+        print(f"Client ID: {pxc_client_id}")
+        print(f"Client Secret: {pxc_client_secret}")
+        print(f"Production APIs? : {useProductionURL}")
+        exit()
+
+
 # Function to get the raw API JSON data from PX Cloud
 def get_json_reply(url, tag):
-    wait_time = 2	# default to 2 seconds delay
     tries = 1
     response = []
     while True:
         try:
-            pxc_refresh_token()
+            token_time_check()
             headers = {
                 'Authorization': f'Bearer {token}'
             }
-            response = pxc_api_request("GET", url, headers, payload)
-            if response:
-                reply = json.loads(response.text)
-                items = reply[tag]
-
-                if response.status_code == 200 and len(items) > 0:
-                    if tries >= 2:
-                        print("\nSuccess on retry! \nContinuing.\n", end="")
+            response = requests.request("GET", url, headers=headers, data=payload, verify=True)
+            reply = json.loads(response.text)
+            items = reply[tag]
+            if debug_level == 2:
+                print("URL Request:", url,
+                      "\nURL Tag:", tag,
+                      "\nHTTP Code:", response.status_code,
+                      "\nReview API Headers:", response.headers,
+                      "\nResponse Body:", response.content)
+            if response.status_code == 500:
+                if debug_level == 2:
+                    print("URL Request:", url,
+                          "\nHTTP Code:", response.status_code,
+                          "\nReview API Headers:", response.headers,
+                          "\nResponse Body:", response.content)
+                    print("Error retrieving API response")
+            if response.status_code == 403:
+                print("\nFailed getting API data due to... \nResponse Body:", response.content)
+                print("URL Request:", url,
+                      "\nHTTP Code:", response.status_code,
+                      "\nReview API Headers:", response.headers,
+                      "\nResponse Body:", response.content)
+            try:
+                if response.status_code == 200:
+                    if len(items) > 0:
+                        if tries >= 2:
+                            print("\nSuccess on retry! \nContinuing.\n", end="")
+                        return items
+            finally:
+                if response.status_code == 200:
                     return items
-
-            else:
-                logging.error("\nEmpty response received. Retrying...\n", end="")
-            
         except Exception as Error:
-            if response:
-                if response.text.__contains__("Customer admin has not provided access."):
-                    logging.info("\nResponse Body:", response.content)
-                    if tag == "items":
-                        logging.critical("Customer admin has not provided access....")
-                    break
-
-                elif response.text.__contains__("Not found"):
-                    logging.info("\nResponse Body:", response.content)
-                    if tag == "items":
-                        logging.warning("No Data Found....Skipping")
-                    break
-
+            if response.text.__contains__("Customer admin has not provided access."):
+                if debug_level == 2:
+                    print("\nResponse Body:", response.content)
                 if tag == "items":
-                    print("\nResponse Content:", response.content)
-                    print("\nAttempt #", tries, "Failed getting:", Error,
-                          "\nRetrying in", wait_time, "seconds\n", end="")
-            else:
-                logging.warning("Failed to get JSON reply... Retrying")    
-
+                    print("Customer admin has not provided access....")
+                break
+            elif response.text.__contains__("Not found"):
+                if debug_level == 2:
+                    print("\nResponse Body:", response.content)
+                if tag == "items":
+                    print("No Data Found....Skipping")
+                break
+            elif response.status_code == 500 or response.status_code == 400:
+                if debug_level == 2:
+                    print("URL Request:", url,
+                          "\nHTTP Code:", response.status_code,
+                          "\nReview API Headers:", response.headers,
+                          "\nResponse Body:", response.content)
+                    print("Error retrieving API response")
+                break
+            if tag == "items":
+                print("\nResponse Content:", response.content)
+                print("\nAttempt #", tries, "Failed getting:", Error,
+                      "\nRetrying in", wait_time, "seconds\n", end="")
+                time.sleep(wait_time)
             if tries >= 3:
-                logging.warning("Failed to get JSON reply... Skipping")
                 break
         finally:
             tries += 1
-            time.sleep(wait_time)	# delay before the next attempt
+
 
 # Function to get the Customer List from PX Cloud
 # The objective of this API is to provide the list of all the customers
 # CSV Naming Convention: Customer.csv
 # JSON Naming Convention: Customers_Page_{page}_of_{total}.json
-def pxc_get_customers():
+def get_pxc_customers():
     print("******************************************************************")
     print("****************** Running Customer Report ***********************")
     print("******************************************************************")
@@ -741,7 +599,7 @@ def pxc_get_customers():
     totalCount = (get_json_reply(url=(pxc_url_customers + "?max=" + max_items), tag="totalCount"))
     if not totalCount:
         print("No Customers found...., exiting....")
-        sys.exit()
+        exit()
     pages = math.ceil(totalCount / int(max_items))
     page = 0
     with open(customers, 'w', encoding="utf-8", newline='') as target:
@@ -778,7 +636,10 @@ def pxc_get_customers():
             if items is not None:
                 if len(items) > 0:
                     with open(json_output_dir +
-                              PageOfFileName("Customers", page, pages), 'w') as json_file:
+                              "Customers" +
+                              "_Page_" + str(page) +
+                              "_of_" + str(pages) +
+                              ".json", 'w') as json_file:
                         json.dump(items, json_file)
                     print(f"Saving {json_file.name}")
     print("\nSearch Completed!")
@@ -792,7 +653,7 @@ def pxc_get_customers():
 # This API will fetch list of partner contracts transacted with Cisco.
 # CSV Naming Convention: Contract.csv
 # JSON Naming Convention: Contracts_Page_{page}_of_{total}.json
-def pxc_get_contracts():
+def get_pxc_contracts():
     print("******************************************************************")
     print("****************** Running Contract Report ***********************")
     print("******************************************************************")
@@ -819,7 +680,7 @@ def pxc_get_contracts():
         writer = csv.writer(target, delimiter=' ', quotechar=' ', quoting=csv.QUOTE_NONE)
         writer.writerow(CSV_Header.split())
         while page < pages:
-            pxc_refresh_token()
+            token_time_check()
             off_set = (page * int(max_items))
             url = (pxc_url_contracts +
                    "?offset=" + str(off_set) +
@@ -870,8 +731,11 @@ def pxc_get_contracts():
             if outputFormat == 1 or outputFormat == 2:
                 if items is not None:
                     if len(items) > 0:
-                        with open(json_output_dir + 
-                                  PageOfFileName("Contracts", page, pages), 'w') as json_file:
+                        with open(json_output_dir +
+                                  "Contracts" +
+                                  "_Page_" + str(page) +
+                                  "_of_" + str(pages) +
+                                  ".json", 'w') as json_file:
                             json.dump(items, json_file)
                             print(f"Saving {json_file.name}")
 
@@ -913,7 +777,7 @@ def pxc_get_contracts():
 # This API will fetch list of partner contracts transacted with Cisco.
 # CSV Naming Convention: Contract.csv
 # JSON Naming Convention: Contracts_Page_{page}_of_{total}.json
-def pxc_get_contractswithcustomers():
+def get_pxc_contractswithcustomers():
     print("******************************************************************")
     print("******** Running Contracts With Customer Names Report ************")
     print("******************************************************************")
@@ -939,7 +803,7 @@ def pxc_get_contractswithcustomers():
         writer = csv.writer(target, delimiter=' ', quotechar=' ', quoting=csv.QUOTE_NONE)
         writer.writerow(CSV_Header.split())
         while page < pages:
-            pxc_refresh_token()
+            token_time_check()
             off_set = (page * int(max_items))
             url = (pxc_url_contractswithcustomers +
                    "?offset=" + str(off_set) +
@@ -990,8 +854,11 @@ def pxc_get_contractswithcustomers():
             if outputFormat == 1 or outputFormat == 2:
                 if items is not None:
                     if len(items) > 0:
-                        with open(json_output_dir + 
-                                  PageOfFileName("ContractsWithNames", page, pages), 'w') as json_file:
+                        with open(json_output_dir +
+                                  "ContractsWithNames" +
+                                  "_Page_" + str(page) +
+                                  "_of_" + str(pages) +
+                                  ".json", 'w') as json_file:
                             json.dump(items, json_file)
                             print(f"Saving {json_file.name}")
     if debug_level == 1 or debug_level == 2:
@@ -1005,7 +872,7 @@ def pxc_get_contractswithcustomers():
 # This API will fetch list of partner contract line items transacted with Cisco.
 # CSV Naming Convention: Contract_Details.csv
 # JSON Naming Convention: {Customer Name}_Contract_Details_{ContractNumber}_Page_{page}_of_{total}.json
-def pxc_get_contracts_details():
+def get_pxc_contracts_details():
     print("******************************************************************")
     print("****************** Running Contract Details **********************")
     print("******************************************************************")
@@ -1030,54 +897,45 @@ def pxc_get_contracts_details():
                          "instanceNumber"
             writer = csv.writer(target, delimiter=' ', quotechar=' ', quoting=csv.QUOTE_NONE)
             writer.writerow(CSV_Header.split())
-
     with open(csv_output_dir + 'unique_contracts.csv', 'r') as target:
         contractList = csv.DictReader(target)
         for row in contractList:
-            pxc_refresh_token()
-            customerName = "None"
-            contractNumber = "None"
-
-            try:
-                customerName = row["customerName"].replace(",", " ")
-            except KeyError:
-                print("No customerName for Row:", row) 
-                pass
-
-            try:
-                contractNumber = row["contractNumber"]
-            except KeyError:
-                print("No contractNumber for Row:", row) 
-                continue
-
+            token_time_check()
+            customerName = row["customerName"].replace(",", " ")
+            contractNumber = row["contractNumber"]
             headers = {'Authorization': f'Bearer {token}'}
             url = (pxc_url_contracts_details +
                    "?contractNumber=" + contractNumber +
                    "&offset=0&max=50"
                    )
             print(f"\nScanning {customerName}")
-            response = pxc_api_request("GET", url, headers, payload)
-            if response and hasattr(response, 'text'):
-                reply = json.loads(response.text)
-            else:
-                print("Contract Details missing response.. continuing")
-                continue
-
+            response = requests.request("GET", url, headers=headers, data=payload, verify=True)
+            reply = json.loads(response.text)
+            if debug_level == 1 or debug_level == 2:
+                print("\nURL Request:", url,
+                      "\nHTTP Code:", response.status_code,
+                      "\nReview API Headers:", response.headers,
+                      "\nResponse Body:", response.content,
+                      "\n====================")
             try:
                 if response.status_code == 200:
                     totalCount = reply["totalCount"]
                     pages = math.ceil(totalCount / int(max_items))
-                    if debug_level == 2:
+                    if debug_level == 1 or debug_level == 2:
                         print("\nTotal Pages:", pages,
                               "\nTotal Records: ", totalCount,
+                              "\nURL Request:", url,
+                              "\nHTTP Code:", response.status_code,
+                              "\nReview API Headers:", response.headers,
+                              "\nResponse Body:", response.content,
                               "\n====================")
-                    page = 1
+                    page = 0
                     if totalCount > 0:
                         print(f"Found contract number {contractNumber}")
                     if totalCount < 1:
                         print(f"No details found for contract number {contractNumber}")
-                    while page <= pages:
-                        off_set = ((page + 1) * int(max_items))
+                    while page < pages:
+                        off_set = (page * int(max_items))
                         url = (pxc_url_contracts_details +
                                "?contractNumber=" + contractNumber +
                                "&offset=" + str(off_set) +
@@ -1087,9 +945,11 @@ def pxc_get_contracts_details():
                         if outputFormat == 1 or outputFormat == 2:
                             if items is not None:
                                 if len(items) > 0:
-                                    page_name = "_Contract_Details_" + contractNumber
-                                    json_file = (json_output_dir + WindowsFileName(customerName) +
-                                                 PageOfFileName(page_name, page, pages))
+                                    json_file = (json_output_dir + customerName.replace('/', '-') +
+                                                 "_Contract_Details_" + contractNumber +
+                                                 "_Page_" + str(page + 1) +
+                                                 "_of_" + str(pages) +
+                                                 ".json")
                                     if not os.path.isfile(json_file):
                                         with open(json_file, 'w') as fileTarget:
                                             json.dump(items, fileTarget)
@@ -1132,10 +992,10 @@ def pxc_get_contracts_details():
                                                         instanceNumber)
                                             writer.writerow(CSV_Data.split())
                         else:
-                            print("\nNo Contract List Data Found .... Skipping")
+                            print("\nNo Data Found .... Skipping")
                         page += 1
             except KeyError:
-                print("No Contract Data to process... Skipping.")
+                print("No Data to process... Skipping.")
                 pass
     print("\nSearch Completed!")
     if debug_level == 1 or debug_level == 2:
@@ -1148,7 +1008,7 @@ def pxc_get_contracts_details():
 # This API will fetch all the offers created by the Partners.
 # CSV Naming Convention: Partner_Offers.csv
 # JSON Naming Convention: Partner_Offers.json
-def pxc_get_partner_offers():
+def get_pxc_partner_offers():
     print("******************************************************************")
     print("**************** Running All Partner Offers **********************")
     print("******************************************************************")
@@ -1282,7 +1142,7 @@ def pxc_get_partner_offers():
                                                 companyName)
                                     writer.writerow(CSV_Data.split())
         else:
-            print("\nNo Partner Offers Found .... Skipping")
+            print("\nNo Data Found .... Skipping")
     if outputFormat == 1 or outputFormat == 2:
         if items is not None:
             if len(items) > 0:
@@ -1300,7 +1160,7 @@ def pxc_get_partner_offers():
 # This API will fetch all the active and inactive sessions of all the Offers created by the Partners.
 # CSV Naming Convention: Partner_Offer_Sessions.csv
 # JSON Naming Convention: Partner_Offer_Sessions.json
-def pxc_get_partner_offer_sessions():
+def get_pxc_partner_offer_sessions():
     print("******************************************************************")
     print("************** Running All Partner Offers Sessions ***************")
     print("******************************************************************")
@@ -1399,7 +1259,7 @@ def pxc_get_partner_offer_sessions():
                                             modifiedDate)
                                 writer.writerow(CSV_Data.split())
         else:
-            print("\nNo Partner Offer Sessions Data Found .... Skipping")
+            print("\nNo Data Found .... Skipping")
     if outputFormat == 1 or outputFormat == 2:
         if items is not None:
             if len(items) > 0:
@@ -1417,7 +1277,7 @@ def pxc_get_partner_offer_sessions():
 # This API will get customer success tracks which will provide the usecase details.
 # CSV Naming Convention: SuccessTracks.csv
 # JSON Naming Convention: SuccessTracks.json
-def pxc_get_successtracks():
+def get_pxc_successtracks():
     print("******************************************************************")
     print("******************** Running Success Track ***********************")
     print("******************************************************************")
@@ -1460,7 +1320,8 @@ def pxc_get_successtracks():
                 if outputFormat == 1 or outputFormat == 2:
                     if items is not None:
                         if len(items) > 0:
-                            with open(json_output_dir + "SuccessTracks.json", 'w') as json_file:
+                            with open(json_output_dir + "SuccessTracks.json",
+                                      'w') as json_file:
                                 json.dump(items, json_file)
                             print(f"Saving {json_file.name}")
             else:
@@ -1552,19 +1413,26 @@ def pxc_assets_reports():
             customerName = row['customerName']
             print(f"\nRequesting Asset data for {customerName}")
             if not successTrackId == "N/A":
-                pxc_refresh_token()
+                token_time_check()
                 url = (pxc_url_customers + "/" + customerId + "/reports")
                 data_payload = json.dumps({"reportName": "Assets", "successTrackId": successTrackId})
                 headers = {'Authorization': f'Bearer {token}'}
-                response = pxc_api_request("POST", url, headers, data_payload)
-                if not response:
-                    print("Asset Report missing response.. continuing")
-                    continue
-
+                response = requests.request(
+                    "POST",
+                    url,
+                    headers=headers,
+                    data=data_payload,
+                    verify=True
+                )
+                if debug_level == 2:
+                    print("Report request URL:", url,
+                          "\nReport details:", data_payload,
+                          "\nHTTP Code:", response.status_code,
+                          "\nReview API Headers:", response.headers,
+                          "\nResponse Body:", response.content)
                 if response.text.__contains__("Customer admin has not provided access."):
                     print("Customer admin has not provided access.")
-
-                else:
+                if not (response.text.__contains__("Customer admin has not provided access.")):
                     try:
                         if bool(response.headers["location"]) is True:
                             pass
@@ -1586,7 +1454,13 @@ def pxc_assets_reports():
                             print("Making API Call again with the following...")
                             print("URL: ", url)
                             print("Data Payload: ", data_payload)
-                            response = px.request("POST", url, headers, data_payload)
+                            response = requests.request(
+                                "POST",
+                                url,
+                                headers=headers,
+                                data=data_payload,
+                                verify=True
+                            )
                             print("Report request URL:", url,
                                   "\nReport details:", data_payload,
                                   "\nHTTP Code:", response.status_code,
@@ -1603,7 +1477,12 @@ def pxc_assets_reports():
                         print("Scanning for data...")
                         filename = (temp_dir + customerId + "_Assets_" + location.split('/')[-1] + '.zip')
                         headers = {'Authorization': f'Bearer {token}'}
-                        response = pxc_api_request("GET", location, headers, payload)
+                        response = requests.request("GET", location, headers=headers, data=payload)
+                        if debug_level == 2:
+                            print("\nLocation URL Returned:", location,
+                                  "\nHTTP Code:", response.status_code,
+                                  "\nReview API Headers:", response.headers,
+                                  "\nResponse Body:", response.content, "\nWait Time:", tries)
                         try:
                             with open(filename, 'wb') as file:
                                 file.write(response.content)
@@ -1618,7 +1497,7 @@ def pxc_assets_reports():
                                     print("\nDownload Failed")
                                     raise Exception("File Corrupted")
                         except Exception as FileCorruptError:
-                            if debug_level == 1 or debug_level == 2:
+                            if debug_level == 2:
                                 print("\nDeleting file..." + str(filename) + " " +
                                       str(FileCorruptError) + "\nRetrying....", end="")
                                 print(f"Pausing for {wait_time} seconds before retrying...", end="")
@@ -1903,19 +1782,26 @@ def pxc_hardware_reports():
             customerName = row['customerName']
             print(f"\nRequesting hardware data for {customerName}")
             if not successTrackId == "N/A":
-                pxc_refresh_token()
+                token_time_check()
                 url = (pxc_url_customers + "/" + customerId + "/reports")
                 data_payload = json.dumps({"reportName": "hardware", "successTrackId": successTrackId})
                 headers = {'Authorization': f'Bearer {token}'}
-                response = pxc_api_request("POST", url, headers, data_payload)
-                if not response:
-                    print("Hardware Report missing response.. continuing")
-                    continue
-
+                response = requests.request(
+                    "POST",
+                    url,
+                    headers=headers,
+                    data=data_payload,
+                    verify=True
+                )
+                if debug_level == 2:
+                    print("Report request URL:", url,
+                          "\nReport details:", data_payload,
+                          "\nHTTP Code:", response.status_code,
+                          "\nReview API Headers:", response.headers,
+                          "\nResponse Body:", response.content)
                 if response.text.__contains__("Customer admin has not provided access."):
                     print(f"Customer admin has not provided access on Success Track {successTrackId}")
-
-                else:
+                if not (response.text.__contains__("Customer admin has not provided access.")):
                     try:
                         if bool(response.headers["location"]) is True:
                             pass
@@ -1925,19 +1811,32 @@ def pxc_hardware_reports():
                         print("\n!!!!!!!!\nException Thrown for", "Customer:", customerName,
                               "on Success Track ", successTrackId,
                               "Report Failed to Download\n")
-
-                        while not response or response.status_code >= 400:
+                        print("Report request URL:", url,
+                              "\nReport details:", data_payload,
+                              "\nHTTP Code:", response.status_code,
+                              "\nReview API Headers:", response.headers,
+                              "\nResponse Body:", response.content)
+                        while response.status_code >= 400:
                             print(f"Pausing for {wait_time} seconds before re-request...")
                             time.sleep(wait_time)
                             print("Resuming...")
                             print("Making API Call again with the following...")
                             print("URL: ", url)
                             print("Data Payload: ", data_payload)
-                            response = pxc_api_request("POST", url, headers, data_payload)
+                            response = requests.request(
+                                "POST",
+                                url,
+                                headers=headers,
+                                data=data_payload,
+                                verify=True
+                            )
+                            print("Report request URL:", url,
+                                  "\nReport details:", data_payload,
+                                  "\nHTTP Code:", response.status_code,
+                                  "\nReview API Headers:", response.headers,
+                                  "\nResponse Body:", response.content)
                             print(f"Review for  {customerName} on Success Track {successTrackId} "
                                   f"Report Failed to Download\n")
-                        #end while
-
                     location = response.headers["location"]
                     location_ready_status(location, headers)
                     json_filename = (location.split('/')[-1] + '.json')
@@ -1947,23 +1846,26 @@ def pxc_hardware_reports():
                         print("Scanning for data...")
                         filename = (temp_dir + location.split('/')[-1] + '.zip')
                         headers = {'Authorization': f'Bearer {token}'}
-                        response = pxc_api_request("GET", location, headers, payload)
-
+                        response = requests.request("GET", location, headers=headers, data=payload)
+                        if debug_level == 2:
+                            print("\nLocation URL Returned:", location,
+                                  "\nHTTP Code:", response.status_code,
+                                  "\nReview API Headers:", response.headers,
+                                  "\nResponse Body:", response.content, "\nWait Time:", tries)
                         try:
-                            if response:
-                                with open(filename, 'wb') as file:
-                                    file.write(response.content)
-                                with open(filename, "rb") as file:
-                                    if file.read() and response.status_code == 200:
-                                        with zipfile.ZipFile(filename, 'r') as zip_file:
-                                            zip_file.extractall(temp_dir)
-                                            if tries >= 2:
-                                                if debug_level == 2:
-                                                    print("Success on retry!\nContinuing\n", end="")
-                                    else:
-                                        print("\nDownload Failed")
-                                        raise Exception("File Corrupted")
-
+                            with open(filename, 'wb') as file:
+                                file.write(response.content)
+                            with open(filename, "rb") as file:
+                                if file.read() and response.status_code == 200:
+                                    with zipfile.ZipFile(filename, 'r') as zip_file:
+                                        zip_file.extractall(temp_dir)
+                                        if tries >= 2:
+                                            if debug_level == 2:
+                                                print("Success on retry!\nContinuing\n", end="")
+                                else:
+                                    print("\nDownload Failed")
+                                    raise Exception("File Corrupted")
+                            # os.remove(filename)
                         except Exception as FileCorruptError:
                             if debug_level == 2:
                                 print("\nDeleting file..." + str(filename) + " " +
@@ -1972,9 +1874,10 @@ def pxc_hardware_reports():
                             time.sleep(wait_time * tries)  # increase the wait with the number of retries
                             if tries >= 3:
                                 break
+                        else:
+                            break
                         finally:
                             tries += 1
-
                     if useProductionURL == 0:
                         proccess_sandbox_files(filename, customerId, "_Hardware_", json_filename)
                     input_json_file = str(temp_dir + customerId + "_Hardware_" + json_filename)
@@ -2123,19 +2026,26 @@ def pxc_software_reports():
             customerName = row['customerName']
             print(f"\nRequesting software data for {customerName}")
             if not successTrackId == "N/A":
-                pxc_refresh_token()
+                token_time_check()
                 url = (pxc_url_customers + "/" + customerId + "/reports")
                 data_payload = json.dumps({"reportName": "software", "successTrackId": successTrackId})
                 headers = {'Authorization': f'Bearer {token}'}
-                response = pxc_api_request("POST", url, headers, data_payload)
-                if not response:
-                    print("Software Report missing response.. continuing")
-                    continue
-
+                response = requests.request(
+                    "POST",
+                    url,
+                    headers=headers,
+                    data=data_payload,
+                    verify=True
+                )
+                if debug_level == 2:
+                    print("Report request URL:", url,
+                          "\nReport details:", data_payload,
+                          "\nHTTP Code:", response.status_code,
+                          "\nReview API Headers:", response.headers,
+                          "\nResponse Body:", response.content)
                 if response.text.__contains__("Customer admin has not provided access."):
                     print(f"Customer admin has not provided access on Success Track {successTrackId}")
-
-                else:
+                if not (response.text.__contains__("Customer admin has not provided access.")):
                     try:
                         if bool(response.headers["location"]) is True:
                             pass
@@ -2157,7 +2067,18 @@ def pxc_software_reports():
                             print("Making API Call again with the following...")
                             print("URL: ", url)
                             print("Data Payload: ", data_payload)
-                            response = pxc_api_request("POST", url, headers, data_payload)
+                            response = requests.request(
+                                "POST",
+                                url,
+                                headers=headers,
+                                data=data_payload,
+                                verify=True
+                            )
+                            print("Report request URL:", url,
+                                  "\nReport details:", data_payload,
+                                  "\nHTTP Code:", response.status_code,
+                                  "\nReview API Headers:", response.headers,
+                                  "\nResponse Body:", response.content)
                             print("Review for", "Customer:", customerName, "on Success Track ", successTrackId,
                                   "Report Failed to Download\n")
                     location = response.headers["location"]
@@ -2169,27 +2090,26 @@ def pxc_software_reports():
                         print("Scanning for data...")
                         filename = (temp_dir + location.split('/')[-1] + '.zip')
                         headers = {'Authorization': f'Bearer {token}'}
-                        response = pxc_api_request("GET", location, headers, payload)
-                        if response and debug_level == 2:
+                        response = requests.request("GET", location, headers=headers, data=payload)
+                        if debug_level == 2:
                             print("\nLocation URL Returned:", location,
                                   "\nHTTP Code:", response.status_code,
                                   "\nReview API Headers:", response.headers,
                                   "\nResponse Body:", response.content, "\nWait Time:", tries)
                         try:
-                            if response:
-                                with open(filename, 'wb') as file:
-                                    file.write(response.content)
-                                with open(filename, "rb") as file:
-                                    if file.read() and response.status_code == 200:
-                                        with zipfile.ZipFile(filename, 'r') as zip_file:
-                                            zip_file.extractall(temp_dir)
-                                            if tries >= 2:
-                                                if debug_level == 2:
-                                                    print("Success on retry!\nContinuing\n", end="")
-                                    else:
-                                        print("\nDownload Failed")
-                                        raise Exception("File Corrupted")
-
+                            with open(filename, 'wb') as file:
+                                file.write(response.content)
+                            with open(filename, "rb") as file:
+                                if file.read() and response.status_code == 200:
+                                    with zipfile.ZipFile(filename, 'r') as zip_file:
+                                        zip_file.extractall(temp_dir)
+                                        if tries >= 2:
+                                            if debug_level == 2:
+                                                print("Success on retry!\nContinuing\n", end="")
+                                else:
+                                    print("\nDownload Failed")
+                                    raise Exception("File Corrupted")
+                            # os.remove(filename)
                         except Exception as FileCorruptError:
                             if debug_level == 2:
                                 print("\nDeleting file..." + str(filename) + " " +
@@ -2198,9 +2118,10 @@ def pxc_software_reports():
                             time.sleep(wait_time * tries)  # increase the wait with the number of retries
                             if tries >= 3:
                                 break
+                        else:
+                            break
                         finally:
                             tries += 1
-
                     if useProductionURL == 0:
                         proccess_sandbox_files(filename, customerId, "_Software_", json_filename)
                     input_json_file = str(temp_dir + customerId + "_Software_" + json_filename)
@@ -2325,19 +2246,26 @@ def pxc_purchased_licenses_reports():
             customerName = row['customerName']
             print(f"\nRequesting purchased Licenses data for {customerName}")
             if not successTrackId == "N/A":
-                pxc_refresh_token()
+                token_time_check()
                 url = (pxc_url_customers + "/" + customerId + "/reports")
-                data_payload = json.dumps({"reportName": "PurchasedL4icenses", "successTrackId": successTrackId})
+                data_payload = json.dumps({"reportName": "PurchasedLicenses", "successTrackId": successTrackId})
                 headers = {'Authorization': f'Bearer {token}'}
-                response = pxc_api_request("POST", url, headers, data_payload)
-                if not response:
-                    print("Purchased License Report missing response.. continuing")
-                    continue
-
+                response = requests.request(
+                    "POST",
+                    url,
+                    headers=headers,
+                    data=data_payload,
+                    verify=True
+                )
+                if debug_level == 2:
+                    print("Report request URL:", url,
+                          "\nReport details:", data_payload,
+                          "\nHTTP Code:", response.status_code,
+                          "\nReview API Headers:", response.headers,
+                          "\nResponse Body:", response.content)
                 if response.text.__contains__("Customer admin has not provided access."):
                     print(f"Customer admin has not provided access on Success Track {successTrackId}")
-
-                else:
+                if not (response.text.__contains__("Customer admin has not provided access.")):
                     try:
                         if bool(response.headers["location"]) is True:
                             pass
@@ -2359,7 +2287,13 @@ def pxc_purchased_licenses_reports():
                             print("Making API Call again with the following...")
                             print("URL: ", url)
                             print("Data Payload: ", data_payload)
-                            response = pxc_api_request("POST", url, headers, data_payload)
+                            response = requests.request(
+                                "POST",
+                                url,
+                                headers=headers,
+                                data=data_payload,
+                                verify=True
+                            )
                             print("Report request URL:", url,
                                   "\nReport details:", data_payload,
                                   "\nHTTP Code:", response.status_code,
@@ -2376,8 +2310,12 @@ def pxc_purchased_licenses_reports():
                         print("Scanning for data...")
                         filename = (temp_dir + location.split('/')[-1] + '.zip')
                         headers = {'Authorization': f'Bearer {token}'}
-                        response = pxc_api_request("GET", location, headers, payload)
-
+                        response = requests.request("GET", location, headers=headers, data=payload)
+                        if debug_level == 2:
+                            print("\nLocation URL Returned:", location,
+                                  "\nHTTP Code:", response.status_code,
+                                  "\nReview API Headers:", response.headers,
+                                  "\nResponse Body:", response.content, "\nWait Time:", tries)
                         try:
                             with open(filename, 'wb') as file:
                                 file.write(response.content)
@@ -2521,18 +2459,26 @@ def pxc_licenses_reports():
             customerName = row['customerName']
             print(f"\nRequesting license data for {customerName}")
             if not successTrackId == "N/A":
-                pxc_refresh_token()
+                token_time_check()
                 url = (pxc_url_customers + "/" + customerId + "/reports")
                 data_payload = json.dumps({"reportName": "Licenses", "successTrackId": successTrackId})
                 headers = {'Authorization': f'Bearer {token}'}
-                response = pxc_api_request("POST", url, headers, data_payload)
-                if not response:
-                    print("License Report missing response.. continuing")
-                    continue
-
+                response = requests.request(
+                    "POST",
+                    url,
+                    headers=headers,
+                    data=data_payload,
+                    verify=True
+                )
+                if debug_level == 2:
+                    print("Report request URL:", url,
+                          "\nReport details:", data_payload,
+                          "\nHTTP Code:", response.status_code,
+                          "\nReview API Headers:", response.headers,
+                          "\nResponse Body:", response.content)
                 if response.text.__contains__("Customer admin has not provided access."):
                     print(f"Customer admin has not provided access on Success Track {successTrackId}")
-                else:
+                if not (response.text.__contains__("Customer admin has not provided access.")):
                     try:
                         if bool(response.headers["location"]) is True:
                             pass
@@ -2554,7 +2500,13 @@ def pxc_licenses_reports():
                             print("Making API Call again with the following...")
                             print("URL: ", url)
                             print("Data Payload: ", data_payload)
-                            response = pxc_api_request("POST", url, headers, data_payload)
+                            response = requests.request(
+                                "POST",
+                                url,
+                                headers=headers,
+                                data=data_payload,
+                                verify=True
+                            )
                             print("Report request URL:", url,
                                   "\nReport details:", data_payload,
                                   "\nHTTP Code:", response.status_code,
@@ -2571,7 +2523,12 @@ def pxc_licenses_reports():
                         print("Scanning for data...")
                         filename = (temp_dir + location.split('/')[-1] + '.zip')
                         headers = {'Authorization': f'Bearer {token}'}
-                        response = pxc_api_request("GET", location, headers, payload)
+                        response = requests.request("GET", location, headers=headers, data=payload)
+                        if debug_level == 2:
+                            print("\nLocation URL Returned:", location,
+                                  "\nHTTP Code:", response.status_code,
+                                  "\nReview API Headers:", response.headers,
+                                  "\nResponse Body:", response.content, "\nWait Time:", tries)
 
                         try:
                             with open(filename, 'wb') as file:
@@ -2744,18 +2701,26 @@ def pxc_security_advisories_reports():
             customerName = row['customerName']
             print(f"\nRequesting security Advisories for {customerName}")
             if not successTrackId == "N/A":
-                pxc_refresh_token()
+                token_time_check()
                 url = (pxc_url_customers + "/" + customerId + "/reports")
                 data_payload = json.dumps({"reportName": "securityadvisories", "successTrackId": successTrackId})
                 headers = {'Authorization': f'Bearer {token}'}
-                response = pxc_api_request("POST", url, headers, data_payload)
-                if not response:
-                    print("Security Advisories missing response.. continuing")
-                    continue
-
+                response = requests.request(
+                    "POST",
+                    url,
+                    headers=headers,
+                    data=data_payload,
+                    verify=True
+                )
+                if debug_level == 2:
+                    print("Report request URL:", url,
+                          "\nReport details:", data_payload,
+                          "\nHTTP Code:", response.status_code,
+                          "\nReview API Headers:", response.headers,
+                          "\nResponse Body:", response.content)
                 if response.text.__contains__("Customer admin has not provided access."):
                     print(f"Customer admin has not provided access on Success Track {successTrackId}")
-                else:
+                if not (response.text.__contains__("Customer admin has not provided access.")):
                     try:
                         if bool(response.headers["location"]) is True:
                             pass
@@ -2777,7 +2742,13 @@ def pxc_security_advisories_reports():
                             print("Making API Call again with the following...")
                             print("URL: ", url)
                             print("Data Payload: ", data_payload)
-                            response = pxc_api_request("POST", url, headers, data_payload)
+                            response = requests.request(
+                                "POST",
+                                url,
+                                headers=headers,
+                                data=data_payload,
+                                verify=True
+                            )
                             print("Report request URL:", url,
                                   "\nReport details:", data_payload,
                                   "\nHTTP Code:", response.status_code,
@@ -2794,8 +2765,12 @@ def pxc_security_advisories_reports():
                         print("Scanning for data...")
                         filename = (temp_dir + location.split('/')[-1] + '.zip')
                         headers = {'Authorization': f'Bearer {token}'}
-                        response = pxc_api_request("GET", location, headers, payload)
-
+                        response = requests.request("GET", location, headers=headers, data=payload)
+                        if debug_level == 2:
+                            print("\nLocation URL Returned:", location,
+                                  "\nHTTP Code:", response.status_code,
+                                  "\nReview API Headers:", response.headers,
+                                  "\nResponse Body:", response.content, "\nWait Time:", tries)
                         try:
                             with open(filename, 'wb') as file:
                                 file.write(response.content)
@@ -2962,18 +2937,26 @@ def pxc_field_notices_reports():
             customerName = row['customerName']
             print(f"\nRequesting Field Notices for {customerName}")
             if not successTrackId == "N/A":
-                pxc_refresh_token()
+                token_time_check()
                 url = (pxc_url_customers + "/" + customerId + "/reports")
                 data_payload = json.dumps({"reportName": "FieldNotices", "successTrackId": successTrackId})
                 headers = {'Authorization': f'Bearer {token}'}
-                response = pxc_api_request("POST", url, headers, data_payload)
-                if not response:
-                    print("Feild Notices Report missing response.. continuing")
-                    continue
-
+                response = requests.request(
+                    "POST",
+                    url,
+                    headers=headers,
+                    data=data_payload,
+                    verify=True
+                )
+                if debug_level == 2:
+                    print("Report request URL:", url,
+                          "\nReport details:", data_payload,
+                          "\nHTTP Code:", response.status_code,
+                          "\nReview API Headers:", response.headers,
+                          "\nResponse Body:", response.content)
                 if response.text.__contains__("Customer admin has not provided access."):
                     print(f"Customer admin has not provided access on Success Track {successTrackId}")
-                else:
+                if not (response.text.__contains__("Customer admin has not provided access.")):
                     try:
                         if bool(response.headers["location"]) is True:
                             pass
@@ -2995,7 +2978,13 @@ def pxc_field_notices_reports():
                             print("Making API Call again with the following...")
                             print("URL: ", url)
                             print("Data Payload: ", data_payload)
-                            response = pxc_api_request("POST", url, headers, data_payload)
+                            response = requests.request(
+                                "POST",
+                                url,
+                                headers=headers,
+                                data=data_payload,
+                                verify=True
+                            )
                             print("Report request URL:", url,
                                   "\nReport details:", data_payload,
                                   "\nHTTP Code:", response.status_code,
@@ -3012,8 +3001,12 @@ def pxc_field_notices_reports():
                         print("Scanning for data...")
                         filename = (temp_dir + location.split('/')[-1] + '.zip')
                         headers = {'Authorization': f'Bearer {token}'}
-                        response = pxc_api_request("GET", location, headers, payload)
-
+                        response = requests.request("GET", location, headers=headers, data=payload)
+                        if debug_level == 2:
+                            print("\nLocation URL Returned:", location,
+                                  "\nHTTP Code:", response.status_code,
+                                  "\nReview API Headers:", response.headers,
+                                  "\nResponse Body:", response.content, "\nWait Time:", tries)
                         try:
                             with open(filename, 'wb') as file:
                                 file.write(response.content)
@@ -3177,18 +3170,26 @@ def pxc_priority_bugs_reports():
             customerName = row['customerName']
             print(f"\nRequesting priority Bugs for {customerName}")
             if not successTrackId == "N/A":
-                pxc_refresh_token()
+                token_time_check()
                 url = (pxc_url_customers + "/" + customerId + "/reports")
                 data_payload = json.dumps({"reportName": "prioritybugs", "successTrackId": successTrackId})
                 headers = {'Authorization': f'Bearer {token}'}
-                response = pxc_api_request("POST", url, headers, data_payload)
-                if not response:
-                    print("Priority Bugs Report missing response.. continuing")
-                    continue
-
+                response = requests.request(
+                    "POST",
+                    url,
+                    headers=headers,
+                    data=data_payload,
+                    verify=True
+                )
+                if debug_level == 2:
+                    print("Report request URL:", url,
+                          "\nReport details:", data_payload,
+                          "\nHTTP Code:", response.status_code,
+                          "\nReview API Headers:", response.headers,
+                          "\nResponse Body:", response.content)
                 if response.text.__contains__("Customer admin has not provided access."):
                     print(f"Customer admin has not provided access on Success Track {successTrackId}")
-                else:
+                if not (response.text.__contains__("Customer admin has not provided access.")):
                     try:
                         if bool(response.headers["location"]) is True:
                             pass
@@ -3209,7 +3210,13 @@ def pxc_priority_bugs_reports():
                             print("Making API Call again with the following...")
                             print("URL: ", url)
                             print("Data Payload: ", data_payload)
-                            response = pxc_api_request("POST", url, headers, data_payload)
+                            response = requests.request(
+                                "POST",
+                                url,
+                                headers=headers,
+                                data=data_payload,
+                                verify=True
+                            )
                             print("Report request URL:", url,
                                   "\nReport details:", data_payload,
                                   "\nHTTP Code:", response.status_code,
@@ -3226,8 +3233,12 @@ def pxc_priority_bugs_reports():
                         print("Scanning for data...")
                         filename = (temp_dir + location.split('/')[-1] + '.zip')
                         headers = {'Authorization': f'Bearer {token}'}
-                        response = pxc_api_request("GET", location, headers, payload)
-
+                        response = requests.request("GET", location, headers=headers, data=payload)
+                        if debug_level == 2:
+                            print("\nLocation URL Returned:", location,
+                                  "\nHTTP Code:", response.status_code,
+                                  "\nReview API Headers:", response.headers,
+                                  "\nResponse Body:", response.content, "\nWait Time:", tries)
                         try:
                             with open(filename, 'wb') as file:
                                 file.write(response.content)
@@ -3341,7 +3352,7 @@ def pxc_priority_bugs_reports():
 # This API will return customer lifecycle which will provide the following:CX solution, Use case and Pitstop info.
 # CSV Naming Convention: Lifecycle.csv
 # JSON Naming Convention: {Customer ID}_Lifecycle.json
-def pxc_get_lifecycle():
+def get_pxc_lifecycle():
     print("******************************************************************")
     print("****************** Running Lifecycle Report **********************")
     print("******************************************************************")
@@ -3371,7 +3382,7 @@ def pxc_get_lifecycle():
             successTrackId = row['successTrackId']
             print(f"\nSanning lifecycle data for {customerName} on Success Track {successTrackId}")
             if not successTrackId == "N/A":
-                pxc_refresh_token()
+                token_time_check()
                 items = (get_json_reply(url=(
                         pxc_url_customers + "/" +
                         customerId +
@@ -3471,7 +3482,7 @@ def pxc_software_groups():
             customerName = row['customerName']
             successTrackId = row['successTrackId']
             if not successTrackId == "N/A":
-                pxc_refresh_token()
+                token_time_check()
                 print(f"\nScanning {customerName}")
                 url = (pxc_url_customers + "/" +
                        customerId +
@@ -3484,7 +3495,7 @@ def pxc_software_groups():
                     if outputFormat == 1 or outputFormat == 2:
                         if items is not None:
                             if len(items) > 0:
-                                with open(json_output_dir + WindowsFileName(customerName) + "_SoftwareGroups.json",
+                                with open(json_output_dir + customerName + "_SoftwareGroups.json",
                                           'w') as json_file:
                                     json.dump(items, json_file)
                                 print(f"Saving {json_file.name}")
@@ -3524,7 +3535,7 @@ def pxc_software_groups():
                                             softwareGroupId)
                                 writer.writerow(CSV_Data.split())
                 else:
-                    print("No Software Groups Data Found .... Skipping")
+                    print("No Data Found .... Skipping")
     print("\nSearch Completed!")
     if debug_level == 1 or debug_level == 2:
         now = datetime.now()
@@ -3629,7 +3640,7 @@ def pxc_software_group_suggestions():
             successTrackId = row['successTrackId']
             suggestionId = row['suggestionId']
             if not successTrackId == "N/A":
-                pxc_refresh_token()
+                token_time_check()
                 print(f"\nFound Software Group Suggestion for {customerName}")
                 url = (pxc_url_customers + "/" +
                        customerId +
@@ -3640,13 +3651,8 @@ def pxc_software_group_suggestions():
                     headers = {
                         'Authorization': f'Bearer {token}'
                     }
-                    response = pxc_api_request("GET", url, headers)
-                    if response and hasattr(response, 'text'):
-                        reply = json.loads(response.text)
-                    else:
-                        print("Software Groups Reports missing response.. continuing")
-                        continue
-
+                    response = requests.request("GET", url, headers=headers, verify=True)
+                    reply = json.loads(response.text)
                     if response.status_code == 200:
                         jsonDump = {'items': [reply]}
                         suggestionsInterval = str(reply['suggestionsInterval'])
@@ -3654,14 +3660,18 @@ def pxc_software_group_suggestions():
                         suggestionSelectedDate = str(reply['suggestionSelectedDate'])
                     else:
                         jsonDump = []
-
+                    if debug_level == 2:
+                        print("URL Request:", url,
+                              "\nHTTP Code:", response.status_code,
+                              "\nReview API Headers:", response.headers,
+                              "\nResponse Body:", response.content)
                 except Exception as Error:
                     print(Error)
                     jsonDump = []
                 finally:
                     if outputFormat == 1 or outputFormat == 2:
                         if not jsonDump == []:
-                            with open(json_output_dir + WindowsFileName(customerName) + "_SoftwareGroup_Suggestions_" + successTrackId
+                            with open(json_output_dir + customerName + "_SoftwareGroup_Suggestions_" + successTrackId
                                       + "_" + suggestionId + ".json", 'w') as json_file:
                                 json.dump(jsonDump, json_file)
                             print(f"Saving {json_file.name}")
@@ -3981,7 +3991,7 @@ def pxc_software_group_suggestions_assets():
             successTrackId = row['successTrackId']
             softwareGroupId = row['softwareGroupId']
             if not successTrackId == "N/A":
-                pxc_refresh_token()
+                token_time_check()
                 print(f"\nFound Software Group ID {softwareGroupId} Suggestion Asset for {customerName}")
                 url = (pxc_url_customers + "/" +
                        customerId +
@@ -4069,7 +4079,7 @@ def pxc_software_group_suggestions_bug_list():
             machineSuggestionId = row['machineSuggestionId']
             headers = {'Authorization': f'Bearer {token}'}
             if not successTrackId == "N/A":
-                pxc_refresh_token()
+                token_time_check()
                 print(f"\nFound machine suggestion ID of {machineSuggestionId} for {customerName}")
                 url = (pxc_url_customers + "/" +
                        customerId +
@@ -4078,34 +4088,35 @@ def pxc_software_group_suggestions_bug_list():
                        "&max=" + max_items +
                        "&machineSuggestionId=" + machineSuggestionId +
                        "&successTrackId=" + successTrackId)
-            response = pxc_api_request("GET", url, headers, payload)
-            if response and hasattr(response, 'text'):
-                reply = json.loads(response.text)
-            else:
-                print("Software Groups Suggestions Bugs List missing response.. continuing")
-                continue
+            response = requests.request("GET", url, headers=headers, data=payload, verify=True)
+            reply = json.loads(response.text)
             try:
                 if response.status_code == 200:
                     totalCount = reply["totalCount"]
                     pages = math.ceil(totalCount / int(max_items))
-                    if debug_level == 2:
+                    if debug_level == 1 or debug_level == 2:
                         print("\nTotal Pages:", pages,
                               "\nTotal Records: ", totalCount,
-                              "\n====================")
-                    page = 1
-                    while page <= pages:
+                              "\nURL Request:", url,
+                              "\nHTTP Code:", response.status_code,
+                              "\nReview API Headers:", response.headers,
+                              "\nResponse Body:", response.content)
+                    page = 0
+                    while page < pages:
                         url = (pxc_url_customers + "/" +
                                customerId +
                                pxc_url_software_group_suggestions_bugs +
-                               "?offset=" + str(page) +
+                               "?offset=" + str(page + 1) +
                                "&max=" + max_items +
                                "&machineSuggestionId=" + machineSuggestionId +
                                "&successTrackId=" + successTrackId)
                         items = (get_json_reply(url, tag="items"))
                         if outputFormat == 1 or outputFormat == 2:
-                            page_name = "_SoftwareGroup_Suggestions_Bug_Lists_" + machineSuggestionId
-                            with open(json_output_dir + WindowsFileName(customerName) +
-                                      PageOfFileName(page_name, page, pages), 'w') as json_file:
+                            with open(json_output_dir + customerName +
+                                      "_SoftwareGroup_Suggestions_Bug_Lists_" + machineSuggestionId +
+                                      "_Page_" + str(page + 1) +
+                                      "_of_" + str(pages) +
+                                      ".json", 'w') as json_file:
                                 json.dump(items, json_file)
                                 print(f"Saving {json_file.name}")
                         if outputFormat == 1 or outputFormat == 3:
@@ -4135,7 +4146,7 @@ def pxc_software_group_suggestions_bug_list():
                                                     featureCount)
                                         writer.writerow(CSV_Data.split())
                         else:
-                            print("No Software Bug Data Found .... Skipping")
+                            print("No Data Found .... Skipping")
                         page += 1
             except KeyError:
                 print("No Data to process... Skipping.")
@@ -4183,7 +4194,7 @@ def pxc_software_group_suggestions_field_notices():
             print(f"Software Group Suggestions Field Notices for {customerName} "
                   f"on Success Track {successTrackId}")
             if not successTrackId == "N/A":
-                pxc_refresh_token()
+                token_time_check()
                 url = (pxc_url_customers + "/" +
                        customerId +
                        pxc_url_software_group_suggestions_field_notices +
@@ -4191,13 +4202,8 @@ def pxc_software_group_suggestions_field_notices():
                        "&max=" + max_items +
                        "&machineSuggestionId=" + machineSuggestionId +
                        "&successTrackId=" + successTrackId)
-                response = pxc_api_request("GET", url, headers, payload)
-                if response and hasattr(response, 'text'):
-                    reply = json.loads(response.text)
-                else:
-                    print("Software Groups Suggestions Field Notice missing response.. continuing")
-                    continue
-
+                response = requests.request("GET", url, headers=headers, data=payload, verify=True)
+                reply = json.loads(response.text)
             try:
                 if response.status_code == 200:
                     totalCount = reply["totalCount"]
@@ -4209,12 +4215,12 @@ def pxc_software_group_suggestions_field_notices():
                               "\nHTTP Code:", response.status_code,
                               "\nReview API Headers:", response.headers,
                               "\nResponse Body:", response.content)
-                    page = 1
-                    while page <= pages:
+                    page = 0
+                    while page < pages:
                         url = (pxc_url_customers + "/" +
                                customerId +
                                pxc_url_software_group_suggestions_field_notices +
-                               "?offset=" + str(page) +
+                               "?offset=" + str(page + 1) +
                                "&max=" + max_items +
                                "&machineSuggestionId=" + machineSuggestionId +
                                "&successTrackId=" + successTrackId)
@@ -4224,9 +4230,11 @@ def pxc_software_group_suggestions_field_notices():
                         if outputFormat == 1 or outputFormat == 2:
                             if items is not None:
                                 if len(items) > 0:
-                                    page_name = "_SoftwareGroup_Suggestions_Field_Notices_" + machineSuggestionId
                                     with open(json_output_dir + customerId +
-                                              PageOfFileName(page_name, page, pages), 'w') as json_file:
+                                              "_SoftwareGroup_Suggestions_Field_Notices_" + machineSuggestionId +
+                                              "_Page_" + str(page + 1) +
+                                              "_of_" + str(pages) +
+                                              ".json", 'w') as json_file:
                                         json.dump(items, json_file)
                                     print(f"Saving {json_file.name}")
                         if outputFormat == 1 or outputFormat == 3:
@@ -4255,7 +4263,7 @@ def pxc_software_group_suggestions_field_notices():
                                                         lastUpdated)
                                             writer.writerow(CSV_Data.split())
                         else:
-                            print("No Software Field Notices Data Found .... Skipping")
+                            print("No Data Found .... Skipping")
                         page += 1
             except KeyError:
                 print("No Data to process... Skipping.")
@@ -4296,7 +4304,7 @@ def pxc_software_group_suggestions_advisories():
     with open(SWGroupSuggestionSummaries, 'r') as target:
         csvreader = csv.DictReader(target)
         for row in csvreader:
-            pxc_refresh_token()
+            token_time_check()
             customerId = row['customerId']
             customerName = row['customerName']
             successTrackId = row['successTrackId']
@@ -4311,13 +4319,8 @@ def pxc_software_group_suggestions_advisories():
                    "&max=" + max_items +
                    "&machineSuggestionId=" + machineSuggestionId +
                    "&successTrackId=" + successTrackId)
-            response = pxc_api_request("GET", url, headers, payload)
-            if response and hasattr(response, 'text'):
-                reply = json.loads(response.text)
-            else:
-                print("Software Groups Suggestions Security Advisories missing response.. continuing")
-                continue
-
+            response = requests.request("GET", url, headers=headers, data=payload, verify=True)
+            reply = json.loads(response.text)
             try:
                 if response.status_code == 200:
                     totalCount = reply["totalCount"]
@@ -4329,12 +4332,12 @@ def pxc_software_group_suggestions_advisories():
                               "\nHTTP Code:", response.status_code,
                               "\nReview API Headers:", response.headers,
                               "\nResponse Body:", response.content)
-                    page = 1
-                    while page <= pages:
+                    page = 0
+                    while page < pages:
                         url = (pxc_url_customers + "/" +
                                customerId +
                                pxc_url_software_group_suggestions_security_advisories +
-                               "?offset=" + str(page) +
+                               "?offset=" + str(page + 1) +
                                "&max=" + max_items +
                                "&machineSuggestionId=" + machineSuggestionId +
                                "&successTrackId=" + successTrackId)
@@ -4344,9 +4347,11 @@ def pxc_software_group_suggestions_advisories():
                         if outputFormat == 1 or outputFormat == 2:
                             if items is not None:
                                 if len(items) > 0:
-                                    page_name = "_Security_Advisories_" + machineSuggestionId
                                     with open(json_output_dir + customerId +
-                                              PageOfFileName(page_name, page, pages), 'w') as json_file:
+                                              "_Security_Advisories_" + machineSuggestionId +
+                                              "_Page_" + str(page + 1) +
+                                              "_of_" + str(pages) +
+                                              ".json", 'w') as json_file:
                                         json.dump(items, json_file)
                                     print(f"Saving {json_file.name}")
                             else:
@@ -4425,7 +4430,7 @@ def pxc_automated_fault_management_faults():
         custList = csv.DictReader(cust_target)
         for row in custList:
             if not row["successTrackId"] == "N/A":
-                pxc_refresh_token()
+                token_time_check()
                 customerId = row['customerId']
                 customerName = row['customerName']
                 successTrackId = row['successTrackId']
@@ -4519,7 +4524,7 @@ def pxc_automated_fault_management_fault_summary():
         custList = csv.DictReader(cust_target)
         for row in custList:
             if not row["successTrackId"] == "N/A":
-                pxc_refresh_token()
+                token_time_check()
                 customerId = row['customerId']
                 customerName = row['customerName']
                 successTrackId = row['successTrackId']
@@ -4614,7 +4619,7 @@ def pxc_automated_fault_management_affected_assets():
         custList = csv.DictReader(cust_target)
         for row in custList:
             if not row["successTrackId"] == "N/A":
-                pxc_refresh_token()
+                token_time_check()
                 customerId = row['customerId']
                 customerName = row['customerName']
                 successTrackId = row['successTrackId']
@@ -4720,21 +4725,16 @@ def pxc_compliance_violations():
             successTrackId = row['successTrackId']
             headers = {'Authorization': f'Bearer {token}'}
             if not successTrackId == "N/A":
-                pxc_refresh_token()
+                token_time_check()
                 url = (pxc_url_customers + "/" +
                        customerId +
                        pxc_url_compliance_violations +
                        "?successTrackId=" + successTrackId +
                        "&days=30" +
                        "&max=" + max_items)
-                response = pxc_api_request("GET", url, headers, payload)
-                if response and hasattr(response, 'text'):
-                    reply = json.loads(response.text)
-                else:
-                    print("Compliance Violations Report missing response.. continuing")
-                    continue
-
-                page = 1
+                response = requests.request("GET", url, headers=headers, data=payload, verify=True)
+                reply = json.loads(response.text)
+                page = 0
                 try:
                     print(f"\nFound Compliance Violations for {customerName} on Success Track {successTrackId}")
                     if response.status_code == 403:
@@ -4753,17 +4753,22 @@ def pxc_compliance_violations():
                                   "\nHTTP Code:", response.status_code,
                                   "\nReview API Headers:", response.headers,
                                   "\nResponse Body:", response.content)
-                        while page <= pages:
-                            url = (pxc_url_customers + "/" + customerId + pxc_url_compliance_violations +
-                                   "?offset=" + str(page) + "&max=" + max_items +
+                        while page < pages:
+                            url = (pxc_url_customers + "/" +
+                                   customerId +
+                                   pxc_url_compliance_violations +
+                                   "?offset=" + str(page + 1) +
+                                   "&max=" + max_items +
                                    "&successTrackId=" + successTrackId)
                             items = (get_json_reply(url, tag="items"))
                             if outputFormat == 1 or outputFormat == 2:
                                 if items is not None:
                                     if len(items) > 0:
-                                        page_name = "_Regulatory_Compliance_Violations_" + successTrackId
                                         with open(json_output_dir + customerId +
-                                                  PageOfFileName(page_name, page, pages), 'w') as json_file:
+                                                  "_Regulatory_Compliance_Violations_" + successTrackId +
+                                                  "_Page_" + str(page + 1) +
+                                                  "_of_" + str(pages) +
+                                                  ".json", 'w') as json_file:
                                             json.dump(items, json_file)
                                         print(f"Saving {json_file.name}")
                             if outputFormat == 1 or outputFormat == 3:
@@ -4855,7 +4860,7 @@ def pxc_assets_violating_compliance_rule():
         custList = csv.DictReader(cust_target)
         fileNum = 0
         for row in custList:
-            pxc_refresh_token()
+            token_time_check()
             fileNum += 1
             customerId = row['customerId']
             customerName = row['customerName']
@@ -4880,9 +4885,10 @@ def pxc_assets_violating_compliance_rule():
             if outputFormat == 1 or outputFormat == 2:
                 if items is not None:
                     if len(items) > 0:
-                        page_name = "_Assets_Violating_Compliance_Rule_" + successTrackId
                         with open(json_output_dir + customerId +
-                                  PageFileName(page_name, fileNum), 'w') as json_file:
+                                  "_Assets_Violating_Compliance_Rule_" + successTrackId +
+                                  "_Page_" + str(fileNum) +
+                                  ".json", 'w') as json_file:
                             json.dump(items, json_file)
                         print(f"Saving {json_file.name}")
             if outputFormat == 1 or outputFormat == 3:
@@ -4975,7 +4981,7 @@ def pxc_compliance_rule_details():
         custList = csv.DictReader(cust_target)
         fileNum = 0
         for row in custList:
-            pxc_refresh_token()
+            token_time_check()
             fileNum += 1
             customerId = row['customerId']
             customerName = row['customerName']
@@ -5000,13 +5006,8 @@ def pxc_compliance_rule_details():
                 headers = {
                     'Authorization': f'Bearer {token}'
                 }
-                response = pxc_api_requests("GET", url, headers)
-                if response and hasattr(response, 'text'):
-                    reply = json.loads(response.text)
-                else:
-                    print("Compliance Rule Detail Report missing response.. continuing")
-                    continue
-
+                response = requests.request("GET", url, headers=headers, verify=True)
+                reply = json.loads(response.text)
                 if response.status_code == 200:
                     items = {'items': [reply]}
                     policyName = str(reply['policyName'])
@@ -5014,15 +5015,20 @@ def pxc_compliance_rule_details():
                     ruleId = str(reply['ruleId'])
                     policyId = str(reply['policyId'])
                     print(f"Found Policy {policyName}")
-
+                if debug_level == 2:
+                    print("URL Request:", url,
+                          "\nHTTP Code:", response.status_code,
+                          "\nReview API Headers:", response.headers,
+                          "\nResponse Body:", response.content)
             except Exception as Error:
                 print(f"\nFailed to collect {Error} due to reply from API: ", reply['message'])
                 items = []
             finally:
                 if outputFormat == 1 or outputFormat == 2:
-                    page_name = "_Policy_Rule_Details_" + successTrackId
                     with open(json_output_dir + customerId +
-                              PageFileName(page_name, fileNum), 'w') as json_file:
+                              "_Policy_Rule_Details_" + successTrackId +
+                              "_Page_" + str(fileNum) +
+                              ".json", 'w') as json_file:
                         json.dump(items, json_file)
                         print(f"Saving {json_file.name}")
                 if outputFormat == 1 or outputFormat == 3:
@@ -5077,7 +5083,7 @@ def pxc_compliance_suggestions():
         custList = csv.DictReader(cust_target)
         fileNum = 0
         for row in custList:
-            pxc_refresh_token()
+            token_time_check()
             fileNum += 1
             customerId = row['customerId']
             customerName = row['customerName']
@@ -5100,13 +5106,10 @@ def pxc_compliance_suggestions():
             if fileNum == 1:
                 print(f"Found Compliance Suggestions on Success Track {successTrackId} "
                       f"for {customerName}")
-            response = pxc_api_request("GET", url, headers, payload)
-            if response and hasattr(response, 'text'):
-                reply = json.loads(response.text)
-            else:
-                print("Compliance Suggestions missing response.. continuing")
-                continue
-
+            response = requests.request("GET", url, headers=headers, data=payload, verify=True)
+            reply = json.loads(response.text)
+            if debug_level == 1 or debug_level == 2:
+                print(reply)
             try:
                 if response.status_code == 200:
                     totalCount = reply["totalCount"]
@@ -5134,9 +5137,9 @@ def pxc_compliance_suggestions():
                         if items is not None:
                             if len(items) > 0:
                                 if outputFormat == 1 or outputFormat == 2:
-                                    file_name = "_Compliance_Suggestions_" + successTrackId
                                     with open(json_output_dir + customerId +
-                                              PageFileName(page_name, fileNum), 'w') as json_file:
+                                              "_Compliance_Suggestions_" + successTrackId + "_Page_" + str(fileNum) +
+                                              ".json", 'w') as json_file:
                                         json.dump(items, json_file)
                                     print(f"Saving {json_file.name}")
                                 if outputFormat == 1 or outputFormat == 3:
@@ -5218,7 +5221,7 @@ def pxc_assets_with_violations():
         for row in custList:
             fileNum += 1
             if not row["successTrackId"] == "N/A":
-                pxc_refresh_token()
+                token_time_check()
                 customerName = row["customerName"]
                 customerId = row["customerId"]
                 successTrackId = row["successTrackId"]
@@ -5234,10 +5237,9 @@ def pxc_assets_with_violations():
                 if outputFormat == 1 or outputFormat == 2:
                     if items is not None:
                         if len(items) > 0:
-                            page_name = "_Assets_with_Violations_" + successTrackId
                             with open(
-                                    json_output_dir + customerId +
-                                    PageFileName(page_name, fileNum), 'w') as json_file:
+                                    json_output_dir + customerId + "_Assets_with_Violations_" + successTrackId +
+                                    "_Page_" + str(fileNum) + ".json", 'w') as json_file:
                                 json.dump(items, json_file)
                             print(f"Saving {json_file.name}")
                 if outputFormat == 1 or outputFormat == 3:
@@ -5327,7 +5329,7 @@ def pxc_asset_violations():
         custList = csv.DictReader(cust_target)
         fileNum = 0
         for row in custList:
-            pxc_refresh_token()
+            token_time_check()
             fileNum += 1
             customerId = row['customerId']
             customerName = row['customerName']
@@ -5347,9 +5349,10 @@ def pxc_asset_violations():
             if outputFormat == 1 or outputFormat == 2:
                 if items is not None:
                     if len(items) > 0:
-                        page_name = "_Asset_Violations_" + sourceSystemId
-                        with open(json_output_dir + customerId + 
-                                  PageFileName(page_name, fileNum), 'w') as json_file:
+                        with open(json_output_dir + customerId +
+                                  "_Asset_Violations_" + sourceSystemId +
+                                  "_Page_" + str(fileNum) +
+                                  ".json", 'w') as json_file:
                             json.dump(items, json_file)
                         print(f"Saving {json_file.name}")
             try:
@@ -5429,7 +5432,7 @@ def pxc_obtained():
                 print("====================\n")
                 print(f"Obtained data for {customerName} on Success Track {successTrackId}")
             if not successTrackId == "N/A":
-                pxc_refresh_token()
+                token_time_check()
                 print(f"Found Customer {customerName} on Success Track {successTrackId}")
                 url = (pxc_url_customers + "/" +
                        customerId +
@@ -5439,19 +5442,18 @@ def pxc_obtained():
                     headers = {
                         'Authorization': f'Bearer {token}'
                     }
-                    response = pxc_api_requests("GET", url, headers)
-                    if response and hasattr(response, 'text'):
-                        reply = json.loads(response.text)
-                    else:
-                        print("Regulatory Compliance Obtained Report missing response.. continuing")
-                        continue
-
+                    response = requests.request("GET", url, headers=headers, verify=True)
+                    reply = json.loads(response.text)
                     if response.status_code == 200:
                         if len(reply) > 0:
                             items = {'items': [reply]}
                             status = str(reply['status'])
                             hasQualifiedAssets = str(reply['hasQualifiedAssets'])
-
+                        if debug_level == 2:
+                            print("URL Request:", url,
+                                  "\nHTTP Code:", response.status_code,
+                                  "\nReview API Headers:", response.headers,
+                                  "\nResponse Body:", response.content)
                     if outputFormat == 1 or outputFormat == 2:
                         if len(items) > 0:
                             if items is not None:
@@ -5475,8 +5477,10 @@ def pxc_obtained():
                                     writer.writerow(CSV_Data.split())
                 except Exception as Error:
                     if response.text.__contains__("Customer admin has not provided access."):
+                        if debug_level == 2:
+                            print("\nResponse Body:", response.content)
+                            print(Error)
                         print("Customer admin has not provided access....Skipping")
-
     print("\nSearch Completed!")
     if debug_level == 1 or debug_level == 2:
         now = datetime.now()
@@ -5522,7 +5526,7 @@ def pxc_crash_risk_assets():
             customerName = row['customerName']
             successTrackId = row['successTrackId']
             if not row["successTrackId"] == "N/A":
-                pxc_refresh_token()
+                token_time_check()
                 print(f"\nFound {customerName} on Success Track{successTrackId}")
                 url = (pxc_url_customers + "/" +
                        customerId +
@@ -5620,7 +5624,7 @@ def pxc_crash_risk_factors():
             assetUniqueId = row["assetUniqueId"]
             if not row["successTrackId"] == "N/A":
                 print(f"\nFound {customerName} with Asset {assetId}")
-                pxc_refresh_token()
+                token_time_check()
                 url = (pxc_url_customers + "/" +
                        customerId +
                        pxc_url_crash_risk_assets + "/" + assetUniqueId +
@@ -5708,7 +5712,7 @@ def pxc_similar_assets():
             assetId = row["assetId"]
             assetUniqueId = row["assetUniqueId"]
             if not row["successTrackId"] == "N/A":
-                pxc_refresh_token()
+                token_time_check()
                 for feature in features:
                     url = (pxc_url_customers + "/" +
                            customerId +
@@ -5814,7 +5818,7 @@ def pxc_crash_in_last():
             serialNumber = row['serialNumber']
             for daysLastCrashed in timePeriods:
                 if not row["successTrackId"] == "N/A":
-                    pxc_refresh_token()
+                    token_time_check()
                     print(f"\nScanning Serial Number {serialNumber} with a last crashed date within {daysLastCrashed} "
                           f"days for {customerName} ")
                     url = (pxc_url_customers + "/" +
@@ -5912,7 +5916,7 @@ def pxc_asset_crash_history():
             assetUniqueId = row["assetUniqueId"]
             assetId = row["assetId"]
             if not row["successTrackId"] == "N/A":
-                pxc_refresh_token()
+                token_time_check()
                 print(f"\nScanning Asset ID:{assetId} for {customerName} on Success Track{successTrackId}")
                 url = (pxc_url_customers + "/" +
                        customerId +
@@ -5956,195 +5960,163 @@ def pxc_asset_crash_history():
         print('Stop DateTime:', now)
     print("====================\n")
 
+
 '''
 Begin main application control
 =======================================================================
 '''
-if __name__ == '__main__':
-    # setup parser
-    parser = argparse.ArgumentParser(description="Your script description.")
-    parser.add_argument("customer", nargs='?', default='credentials', help="Customer name")
-    parser.add_argument("-log", "--log-level", default="CRITICAL", help="Set the logging level (default: CRITICAL)")
+# call function to load config.ini data into variables
+load_config()
+# clear log folder before the script runs if logging is enabled
+if log_to_file == 1:
+    if outputFormat == 1:
+        print("Saving data in JSON and CSV formats")
+    if outputFormat == 2:
+        print("Saving data in JSON format")
+    if outputFormat == 3:
+        print("Saving data in CSV format")
+    if os.path.isdir(log_output_dir):
+        shutil.rmtree(log_output_dir)
+        os.mkdir(log_output_dir)
+    else:
+        os.mkdir(log_output_dir)
+# Set URL to Sandbox if useProductionURL is false
+if useProductionURL == 0:
+    pxc_url_base = urlProtocol + urlHost + urlLinkSandbox
+    pxc_scope = "api.customer.assets.manage"
+    environment = "Sandbox"
+elif useProductionURL == 1:
+    pxc_url_base = urlProtocol + urlHost + urlLink
+    pxc_scope = "api.authz.iam.manage"
+    environment = "Production"
+pxc_url_customers = pxc_url_base + "customers"
+pxc_url_contracts = pxc_url_base + "contracts"
+pxc_url_contractswithcustomers = pxc_url_base + "contractsWithCustomers"
+pxc_url_contracts_details = pxc_url_base + "contract/details"
+pxc_url_partner_offers = pxc_url_base + "partnerOffers"
+pxc_url_partner_offers_sessions = pxc_url_base + "partnerOffersSessions"
+pxc_url_successTracks = pxc_url_base + "successTracks"
 
-    # Parse command-line arguments
-    args = parser.parse_args()
-
-
-    # Check if the specified log level is valid
-    #   CRITICAL: Indicates a very serious error, typically leading to program termination.
-    #   ERROR:    Indicates an error that caused the program to fail to perform a specific function.
-    #   WARNING:  Indicates a warning that something unexpected happened
-    #   INFO:     Provides confirmation that things are working as expected
-    #   DEBUG:    Provides info useful for diagnosing problems
-    log_level = args.log_level.upper()
-    if log_level not in ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"):
-        print("Invalid log level. Please use one of: DEBUG, INFO, WARNING, ERROR, CRITICAL")
-        exit(1)
-
-    # Set up logging based on the parsed log level
-    logging.basicConfig(level=log_level)
-
-    # Your application code
-    logger = logging.getLogger(__name__)
-    
-    # call function to load config.ini data into variables
-    customer = args.customer
-    load_config(customer)
-
-    # create a per-customer folder for saving data
-    if customer:
-        # Create the customers directory
-        os.makedirs(customer, exist_ok=True)
-        # Change into the directory
-        os.chdir(customer)
-
-    # clear log folder before the script runs if logging is enabled
+# Set number of itterations for testing, time stamp, logging level and if the log should be written to file
+for x in range(0, testLoop):
+    if debug_level == 0:
+        logLevel = "Low"
+    elif debug_level == 1:
+        logLevel = "Medium"
+    elif debug_level == 2:
+        logLevel = "High"
     if log_to_file == 1:
-        if outputFormat == 1:
-            print("Saving data in JSON and CSV formats")
+        print(f"Logging output to file PXCloud_##.log with debug level set to {logLevel} for version {codeVersion}")
+        sys.stdout = open(log_output_dir + 'PXCLoud_' + str(x + 1) + '.log', 'wt')
+    startTime = time.time()
+    print('Start Time:', datetime.now())
+    print("Execution:", x + 1, "of", testLoop, "\nDebug level is:", logLevel, "\nVersion is", codeVersion,
+          "\nEnvironment is", environment)
+    if outputFormat == 1:
+        print("Saving data in JSON and CSV formats")
+    if outputFormat == 2:
+        print("Saving data in JSON format")
+    if outputFormat == 3:
+        print("Saving data in CSV format")
+
+    # delete temp and output directories and recreate before every run
+    temp_storage()
+
+    # call the function to get a valid PX Cloud API token
+    get_pxc_token()
+
+    # call the function to get the PX Cloud Customer List
+    get_pxc_customers()
+
+    # call the function to get the PX Cloud Contract List
+    get_pxc_contracts()  # requires CSV data from get_pxc_customers
+
+    # call the function to get the PX Cloud Contract List with customers Names and ID's
+    get_pxc_contractswithcustomers()  # requires CSV data from get_pxc_customers
+
+    # call the function to get the PX Cloud Contract Details
+    get_pxc_contracts_details()  # requires CSV data from get_pxc_contracts
+
+    # call the function to get the PX Cloud Partner Offers
+    get_pxc_partner_offers()
+
+    # call the function to get the PX Cloud Partner Offer Sessions
+    get_pxc_partner_offer_sessions()
+
+    # call the function to get the PX Success Tracks List
+    get_pxc_successtracks()
+
+    # call the function to request and process the PX Cloud Assets Reports data
+    pxc_assets_reports()  # requires CSV data from get_pxc_customers
+
+    # call the function to request and process the PX Cloud Hardware Reports data
+    pxc_hardware_reports()  # requires CSV data from get_pxc_customers
+
+    # call the function to request and process the PX Cloud Software Reports data
+    pxc_software_reports()  # requires CSV data from get_pxc_customers
+
+    # call the function to request and process the PX Cloud Purchased Licenses Reports data
+    pxc_purchased_licenses_reports()  # requires CSV data from get_pxc_customers
+
+    # call the function to request and process the PX Cloud Licenses Reports data
+    pxc_licenses_reports()  # requires CSV data from get_pxc_customers
+
+    # call the function to request and process the PX Cloud Security Advisories Reports data
+    pxc_security_advisories_reports()  # requires CSV data from get_pxc_customers
+
+    # call the function to request and process the PX Cloud Field Notices Reports data
+    pxc_field_notices_reports()  # requires CSV data from get_pxc_customers
+
+    # call the function to request and process the PX Cloud Priority Bugs Reports data
+    pxc_priority_bugs_reports()  # requires CSV data from get_pxc_customers
+
+    # call the function to get the PX Cloud Lifecycle data
+    get_pxc_lifecycle()  # requires CSV data from get_pxc_customers
+
+    # call the Optimal Software Version data from PX Cloud (currently only for Campus Network Success Tracks)
+    pxc_software_groups()  # requires CSV data from get_pxc_customers
+    pxc_software_group_suggestions()  # requires CSV data from pxc_software_groups
+    pxc_software_group_suggestions_assets()  # requires CSV data from pxc_software_groups
+    pxc_software_group_suggestions_bug_list()  # requires CSV data from pxc_software_group_suggestions
+    pxc_software_group_suggestions_field_notices()  # requires CSV data from pxc_software_group_suggestions
+    pxc_software_group_suggestions_advisories()  # requires CSV data from pxc_software_group_suggestions
+
+    # call the Automated Fault Management data from PX Cloud (currently only for Campus Network Success Tracks)
+    pxc_automated_fault_management_faults()  # requires CSV data from get_pxc_customers
+    pxc_automated_fault_management_fault_summary()  # requires CSV data from pxc_automated_fault_management_faults
+    pxc_automated_fault_management_affected_assets()  # requires CSV data from pxc_automated_fault_management_faults
+
+    # call the Regulatory Compliance Check data from PX Cloud (currently only for Campus Network Success Tracks)
+    pxc_compliance_violations()  # requires CSV data from get_pxc_customers
+    pxc_assets_violating_compliance_rule()  # requires CSV data from pxc_compliance_violations
+    pxc_compliance_rule_details()  # requires CSV data from pxc_compliance_violations
+    pxc_compliance_suggestions()  # requires CSV data from pxc_compliance_violations
+    pxc_assets_with_violations()  # requires CSV data from get_pxc_customers
+    pxc_asset_violations()  # requires CSV data from pxc_assets_with_violations
+    pxc_obtained()  # requires CSV data from get_pxc_customers
+
+    # call the Risk Mitigation Check data from PX Cloud (currently only for Campus Network Success Tracks)
+    pxc_crash_risk_assets()  # requires CSV data from get_pxc_customers
+    pxc_crash_risk_factors()  # requires CSV data from pxc_crash_risk_assets
+    pxc_similar_assets()  # requires CSV data from pxc_crash_risk_assets
+    pxc_crash_in_last()  # requires CSV data from pxc_crash_risk_assets
+    pxc_asset_crash_history()  # requires CSV data from pxc_crash_risk_assets
+
+    # Send all CSV files in the output data folder to AWS S3 storage
+    s3_storage()
+
+    # Record time and cleanly exit or run next itteration
+    print("******************************************************************")
+    print("**************** Script Executed Successfully ********************")
+    print("******************************************************************")
+    stopTime = time.time()
+    print(f"Stop Time:{datetime.now()}\n\n")
+    print(f"Total Time:{math.ceil(int(stopTime - startTime) / 60)} minutes")
+    if x + 1 == testLoop:
+        # Clean exit
         if outputFormat == 2:
-            print("Saving data in JSON format")
-        if outputFormat == 3:
-            print("Saving data in CSV format")
-        if os.path.isdir(log_output_dir):
-            shutil.rmtree(log_output_dir)
-            os.mkdir(log_output_dir)
-        else:
-            os.mkdir(log_output_dir)
-
-    # Set URL to Sandbox if useProductionURL is false
-    if useProductionURL == 0:
-        pxc_url_base = urlProtocol + urlHost + urlLinkSandbox
-        pxc_scope = "api.customer.assets.manage"
-        environment = "Sandbox"
-    elif useProductionURL == 1:
-        pxc_url_base = urlProtocol + urlHost + urlLink
-        pxc_scope = "api.authz.iam.manage"
-        environment = "Production"
-    pxc_url_customers = pxc_url_base + "customers"
-    pxc_url_contracts = pxc_url_base + "contracts"
-    pxc_url_contractswithcustomers = pxc_url_base + "contractsWithCustomers"
-    pxc_url_contracts_details = pxc_url_base + "contract/details"
-    pxc_url_partner_offers = pxc_url_base + "partnerOffers"
-    pxc_url_partner_offers_sessions = pxc_url_base + "partnerOffersSessions"
-    pxc_url_successTracks = pxc_url_base + "successTracks"
-
-    # Set number of itterations for testing, time stamp, logging level and if the log should be written to file
-    for x in range(0, testLoop):
-        if debug_level == 0:
-            logLevel = "Low"
-        elif debug_level == 1:
-            logLevel = "Medium"
-        elif debug_level == 2:
-            logLevel = "High"
-
-        if log_to_file == 1:
-            print(f"Logging output to file PXCloud_##.log with debug level set to {logLevel} for version {codeVersion}")
-            sys.stdout = open(log_output_dir + 'PXCLoud_' + str(x + 1) + '.log', 'wt')
-
-        startTime = time.time()
-        print('Start Time:', datetime.now())
-        print("Execution:", x + 1, "of", testLoop, "\nDebug level is:", logLevel, "\nVersion is", codeVersion,
-              "\nEnvironment is", environment)
-
-        # delete temp and output directories and recreate before every run
-        pxc_storage(None)
-
-        # call the function to get a valid PX Cloud API token
-        pxc_get_token()
-
-        # call the function to get the PX Cloud Customer List
-        pxc_get_customers()
-
-        # call the function to get the PX Cloud Contract List
-        pxc_get_contracts()  # requires CSV data from pxc_get_customers
-
-        # call the function to get the PX Cloud Contract List with customers Names and ID's
-        pxc_get_contractswithcustomers()  # requires CSV data from pxc_get_customers
-
-        # call the function to get the PX Cloud Contract Details
-        pxc_get_contracts_details()  # requires CSV data from pxc_get_contracts
-
-        # call the function to get the PX Cloud Partner Offers
-        pxc_get_partner_offers()
-
-        # call the function to get the PX Cloud Partner Offer Sessions
-        pxc_get_partner_offer_sessions()
-
-        # call the function to get the PX Success Tracks List
-        pxc_get_successtracks()
-
-        # call the function to request and process the PX Cloud Assets Reports data
-        pxc_assets_reports()  # requires CSV data from pxc_get_customers
-
-        # call the function to request and process the PX Cloud Hardware Reports data
-        pxc_hardware_reports()  # requires CSV data from pxc_get_customers
-
-        # call the function to request and process the PX Cloud Software Reports data
-        pxc_software_reports()  # requires CSV data from pxc_get_customers
-
-        # call the function to request and process the PX Cloud Purchased Licenses Reports data
-        pxc_purchased_licenses_reports()  # requires CSV data from pxc_get_customers
-
-        # call the function to request and process the PX Cloud Licenses Reports data
-        pxc_licenses_reports()  # requires CSV data from pxc_get_customers
-
-        # call the function to request and process the PX Cloud Security Advisories Reports data
-        pxc_security_advisories_reports()  # requires CSV data from pxc_get_customers
-
-        # call the function to request and process the PX Cloud Field Notices Reports data
-        pxc_field_notices_reports()  # requires CSV data from pxc_get_customers
-
-        # call the function to request and process the PX Cloud Priority Bugs Reports data
-        pxc_priority_bugs_reports()  # requires CSV data from pxc_get_customers
-
-        # call the function to get the PX Cloud Lifecycle data
-        pxc_get_lifecycle()  # requires CSV data from pxc_get_customers
-
-        # call the Optimal Software Version data from PX Cloud (currently only for Campus Network Success Tracks)
-        pxc_software_groups()  # requires CSV data from pxc_get_customers
-        pxc_software_group_suggestions()  # requires CSV data from pxc_software_groups
-        pxc_software_group_suggestions_assets()  # requires CSV data from pxc_software_groups
-        pxc_software_group_suggestions_bug_list()  # requires CSV data from pxc_software_group_suggestions
-        pxc_software_group_suggestions_field_notices()  # requires CSV data from pxc_software_group_suggestions
-        pxc_software_group_suggestions_advisories()  # requires CSV data from pxc_software_group_suggestions
-
-        # call the Automated Fault Management data from PX Cloud (currently only for Campus Network Success Tracks)
-        pxc_automated_fault_management_faults()  # requires CSV data from pxc_get_customers
-        pxc_automated_fault_management_fault_summary()  # requires CSV data from pxc_automated_fault_management_faults
-        pxc_automated_fault_management_affected_assets()  # requires CSV data from pxc_automated_fault_management_faults
-
-        # call the Regulatory Compliance Check data from PX Cloud (currently only for Campus Network Success Tracks)
-        pxc_compliance_violations()  # requires CSV data from pxc_get_customers
-        pxc_assets_violating_compliance_rule()  # requires CSV data from pxc_compliance_violations
-        pxc_compliance_rule_details()  # requires CSV data from pxc_compliance_violations
-        pxc_compliance_suggestions()  # requires CSV data from pxc_compliance_violations
-        pxc_assets_with_violations()  # requires CSV data from pxc_get_customers
-        pxc_asset_violations()  # requires CSV data from pxc_assets_with_violations
-        pxc_obtained()  # requires CSV data from pxc_get_customers
-
-        # call the Risk Mitigation Check data from PX Cloud (currently only for Campus Network Success Tracks)
-        pxc_crash_risk_assets()  # requires CSV data from pxc_get_customers
-        pxc_crash_risk_factors()  # requires CSV data from pxc_crash_risk_assets
-        pxc_similar_assets()  # requires CSV data from pxc_crash_risk_assets
-        pxc_crash_in_last()  # requires CSV data from pxc_crash_risk_assets
-        pxc_asset_crash_history()  # requires CSV data from pxc_crash_risk_assets
-
-        # Send all CSV files in the output data folder to AWS S3 storage
-        s3_storage()
-
-        # Record time and cleanly exit or run next itteration
-        print("******************************************************************")
-        print("**************** Script Executed Successfully ********************")
-        print("******************************************************************")
-        stopTime = time.time()
-        print(f"Stop Time:{datetime.now()}\n\n")
-        print(f"Total Time:{math.ceil(int(stopTime - startTime) / 60)} minutes")
-        if x + 1 == testLoop:
-            # Clean exit
-            if outputFormat == 2:
-                shutil.rmtree(csv_output_dir)
-            exit()
-        else:
-            print("pausing for 5 secs")
-            time.sleep(5)  # pause 5 sec between each itteration
+            shutil.rmtree(csv_output_dir)
+        exit()
+    else:
+        print("pausing for 5 secs")
+        time.sleep(5)  # pause 5 sec between each itteration
