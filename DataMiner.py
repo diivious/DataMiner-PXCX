@@ -349,13 +349,13 @@ def api_exception(e):
     if hasattr(e, 'request') and e.request:
         # Logging.Info details of the request that caused the exception
         logging.error(f"{e.request.method} Request URL: {e.request.url}")
-        logging.debug(f"Request Headers{e.request.headers}")
-        logging.debug(f"Request Body:{e.request.body}")
+        logging.error(f"Request Headers{e.request.headers}")
+        logging.error(f"Request Body:{e.request.body}")
 
     if hasattr(e, 'response') and e.response:
         logging.error(f"Response Status Code:{e.response.status_code}")
-        logging.debug(f"Response Headers:{e.response.headers}")
-        logging.debug(f"Response Content:{e.response.text}")
+        logging.error(f"Response Headers:{e.response.headers}")
+        logging.error(f"Response Content:{e.response.text}")
 
 #
 # handle the send
