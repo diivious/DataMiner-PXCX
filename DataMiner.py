@@ -165,33 +165,38 @@ Version Features and enhancements
 
 """
 
+# adding Cisco DataMiner Folder to system path
+import sys
+sys.path.insert(0, '../cdm')
+
 import base64
 import boto3
+from botocore.exceptions import ClientError
+from botocore.exceptions import NoCredentialsError
+
 import csv
 import json
 import inspect
+import logging
 import math
 import os
-import re
-import requests
 import shutil
-import sys
 import time
-import zipfile
-import logging
-import argparse
-#import cdm
-
-from botocore.exceptions import ClientError
-from botocore.exceptions import NoCredentialsError
-from configparser import ConfigParser
 from datetime import datetime
-from requests.adapters import HTTPAdapter
-from requests.packages.urllib3.util.retry import Retry
+import zipfile
+import argparse
+from configparser import ConfigParser
+
+import cdm
+from cdm import tokenUrl
+from cdm import grantType
+from cdm import clientId
+from cdm import clientSecret
+from cdm import cacheControl
+from cdm import authScope
 
 """
 Notes on Imports
-requests for making API calls
 json for parsing json data
 csv for parsing csv data
 os for file/folder management
@@ -209,15 +214,15 @@ cdm for common Cisco DataMiner functions
 
 # PXCloud settings
 # =======================================================================
+# Cisco DataMiner Module Variables
+cdm.tokenUrl = "https://id.cisco.com/oauth2/aus1o4emxorc3wkEe5d7/v1/token"
+
 # Generic URL Variables
-pxc_token_url = "https://id.cisco.com/oauth2/aus1o4emxorc3wkEe5d7/v1/token"
+urlBase = ""
 urlProtocol = "https://"
-pxc_url_base = ""
 urlHost = "api-cx.cisco.com/"
 urlLink = "px/v1/"
 urlLinkSandbox = "sandbox/px/v1/"
-grant_type = "client_credentials"
-pxc_cache_control = "no-cache"
 environment = ""
 
 # Customer and Analytics Insights URL Variables
@@ -248,10 +253,12 @@ pxc_url_crash_risk_asset_crash_history = "/crashHistory"
 # Data File Variables
 codeVersion = str("1.0.0.20d")
 configFile = "config.ini"
+
 csv_output_dir = "outputcsv/"
 json_output_dir = "outputjson/"
 log_output_dir = "outputlog/"
 temp_dir = "temp/"
+
 customers = (csv_output_dir + "Customers.csv")
 contracts = (csv_output_dir + "Contracts.csv")
 contractsWithCustomers = (csv_output_dir + "Contracts_With_Customer_Names.csv")
@@ -293,9 +300,8 @@ CrashRiskAssetsLastCrashed = (csv_output_dir + "Crash_Risk_Assets_Last_Crashed.c
 CrashRiskAssetCrashHistory = (csv_output_dir + "Crash_Risk_Asset_Crash_History.csv")
 features = ["features", "fingerprint", "softwares_features"]
 timePeriods = [1, 7, 15, 90]
+
 # Configuration File Variables
-pxc_client_id = ""  # Used to store the PX Cloud Client ID
-pxc_client_secret = ""  # Used to store the PX Cloud Client Secret
 s3access_key = ""  # Used to store the Amazon Web Services S3 (Simple Storage Service) Key
 s3access_secret = ""  # Used to store the Amazon Web Services S3 (Simple Storage Service) Secret
 s3bucket_folder = ""  # Used to store the Amazon Web Services S3 (Simple Storage Service) Bucket Folder
@@ -303,8 +309,6 @@ s3bucket_name = ""  # Used to store the Amazon Web Services S3 (Simple Storage S
 
 # Data Initializer Variables
 payload = {}  # Used for Making API Request
-token = ""  # Used for Making API Requests
-tokenStartTime = 0
 
 # the following settings are set in the config.ini "settings" section. Below are default placeholders for those values.
 wait_time = 1  # Used for setting a global wait timer (minimum requirement is 1)
@@ -318,227 +322,64 @@ outputFormat = 1  # generate output in the form of Both, JSON or CSV. 1=Both 2=J
 useProductionURL = 1  # if true, use production URL, if false, use sandbox URL (1=True 2=False) Default is 1
 
 '''
-Begin defining functions to move to cdm module
-=======================================================================
-'''
-#
-# Cleanup file name to be Windows compatable
-def WindowsFileName(json_filename):
-    # Define a pattern to match characters not allowed in Windows filenames
-    invalid_char_pattern = re.compile(r'[<>:"/\\|?* &\x00-\x1F]+')
-
-    # Replace invalid characters with an underscore
-    filename = invalid_char_pattern.sub('_', json_filename)
-    return filename
-
-#
-# JSON Naming Convention: <page_name>_Page_{page}.json
-def PageFileName(page_name, page):
-    filename = page_name + "_Page_" + str(page) + ".json"
-    return WindowsFileName(filename)
-
-#
-# JSON Naming Convention: <page_name>_Page_{page}_of_{total}.json
-def PageOfFileName(page_name, page, total):
-    filename = page_name + "_Page_" + str(page) + "_of_" + str(total) + ".json"
-    return WindowsFileName(filename)
-
-#
-# common error handling
-def api_exception(e):
-    if hasattr(e, 'request') and e.request:
-        # Logging.Info details of the request that caused the exception
-        logging.error(f"{e.request.method} Request URL: {e.request.url}")
-        logging.debug(f"Request Headers{e.request.headers}")
-        logging.debug(f"Request Body:{e.request.body}")
-
-    if hasattr(e, 'response') and e.response:
-        logging.error(f"Response Status Code:{e.response.status_code}")
-        logging.debug(f"Response Headers:{e.response.headers}")
-        logging.debug(f"Response Content:{e.response.text}")
-
-#
-# handle the send
-def send_request(method, url, headers, payload=None):
-    if method == "GET":
-        return requests.get(url, headers=headers, verify=True, timeout=10)
-    else:
-        return requests.request(method, url, headers=headers, data=payload, verify=True, timeout=10)
-            
-#
-# function to contain the error logic for any API request call
-def pxc_api_request(method, url, headers, payload=None):
-    global token
-    firstTime = True
-    tries = 1
-    response = []
-
-    # Include all HTTP error codes (4xx and 5xx) in status_forcelist
-    all_error_codes = [code for code in range(400, 600)]
-
-    # Create a custom Retry object with max retries
-    retry_strategy = Retry(
-        total=30,		# Maximum number of retries
-        backoff_factor=0.1,	# Factor to apply between retry attempts
-        status_forcelist=all_error_codes,
-    )
-    
-    # Create a custom HTTPAdapter with the Retry strategy
-    adapter = HTTPAdapter(max_retries=retry_strategy)
-
-    # Create a Session and mount the custom adapter
-    session = requests.Session()
-    session.mount('https://', adapter)
-    session.mount('http://', adapter)
-
-    # Rather Chatty ...
-    logging.debug(f"{method}: URL:{url}")
-
-    while True:
-        try:
-            response = send_request(method, url, headers, payload)
-            response.raise_for_status()  # Raise an HTTPError for bad responses (4xx and 5xx)
-            if tries >= 2:
-                logging.info("\nSuccess on retry! \nContinuing.")
-            break
-        except requests.exceptions.ReadTimeout as e:
-            logging.error(f"ReadTimeoutError: Method:{method} Attempt:{tries}")
-            api_exception(e)
-        except requests.exceptions.Timeout as e:
-            logging.error(f"TimeoutError: Method:{method} Attempt:{tries}")
-            api_exception(e)
-        except ConnectionError as e:
-            logging.error(f"ConnectionError: Method:{method} Attempt:{tries}")
-            api_exception(e)
-        except requests.exceptions.RequestException as e:
-            logging.error(f"RequestException: Method:{method} Attempt:{tries}")
-            api_exception(e)
-        except Exception as e:
-            logging.error(f"Unexpected error: Method:{method} Attempt:{tries}")
-            api_exception(e)
-        except requests.exceptions.HTTPError as e:
-            logging.error(f"HTTPError: Method:{method} Attempt:{tries}")
-            api_exception(e)
-            if response.status_code >= 500:
-                logging.info("Server Error: Retrying API call")
-            elif response.status_code == 401 or response.status_code == 403:
-                if firstTime:
-                    # Unauthorized? lets see if a new token will help.. but only try once
-                    pxc_get_token()
-                    firstTiome = FALSE
-            elif response.status_code >= 400:
-                logging.error("Client Error: Aborting API call")
-                response = []
-                break
-        finally:
-            tries += 1
-            pxc_refresh_token()		# check to see if token refresh is needed
-            time.sleep(2)		# 2 seconds delay before the next attempt
-
-        #End Try
-    #End While
-    return response
-
-# If needed, refresh the token so it does not expire
-def pxc_refresh_token():
-    checkTime = time.time()
-    tokenTime = math.ceil(int(checkTime - tokenStartTime) / 60)
-    if tokenTime > 99:
-        logging.info(f"Token Time is :{tokenTime} minutes, Refreshing")
-        pxc_get_token()
-    else:
-        logging.debug(f"Token time is :{tokenTime} minutes")
-
-
-# Function to get a valid API token from PX Cloud
-def pxc_get_token():
-    global token
-    global tokenStartTime
-    print("\nGetting PX Cloud Token")
-    url = (pxc_token_url
-           + "?grant_type=" + grant_type
-           + "&client_id=" + pxc_client_id
-           + "&client_secret=" + pxc_client_secret
-           + "&cache-control=" + pxc_cache_control
-           + "&scope=" + pxc_scope
-    )
-    headers = {
-        'Content-type': 'application/x-www-form-urlencoded'
-    }
-    response = requests.request("POST", url, headers=headers, data=payload)
-    if response:
-        reply = response.json()
-        token = reply.get("access_token", None)
-    else:
-        token = None
-        
-    tokenStartTime = time.time()
-    logging.info(f"API Token:{token}")
-    if token:
-        print("Done!")
-        print("====================\n\n")
-
-    else: 
-        logging.critical("Unable to retrieve a valid token\n"
-              "Check config.ini and ensure your API Keys and if your using the Sandbox or Production for accuracy")
-        logging.critical(f"Client ID: {pxc_client_id}")
-        logging.critical(f"Client Secret: {pxc_client_secret}")
-        logging.critical(f"Production APIs? : {useProductionURL}")
-        sys.exit()
-
-# Function to generate or clear output and temp folders for use.
-def pxc_storage(logfile=None):
-    # Both or JSON
-    if outputFormat == 1 or outputFormat == 2:
-        print("Saving data in JSON format")
-        if os.path.isdir(json_output_dir):
-            shutil.rmtree(json_output_dir)
-            os.mkdir(json_output_dir)
-        else:
-            os.mkdir(json_output_dir)
-
-    # Both or CSV
-    if outputFormat == 1 or outputFormat == 3:
-        print("Saving data in CSV format")
-        if os.path.isdir(csv_output_dir):
-            shutil.rmtree(csv_output_dir)
-            os.mkdir(csv_output_dir)
-        else:
-            os.mkdir(csv_output_dir)
-
-    if os.path.isdir(temp_dir):
-        shutil.rmtree(temp_dir)
-        os.mkdir(temp_dir)
-    else:
-        os.mkdir(temp_dir)
-
-    if logfile:
-        logging.basicConfig(format=fmt, level=logging.DEBUG, datefmt="%H:%M:%S", filename=logfile)
-
-'''
 Begin defining functions
 =======================================================================
 '''
+def init_logger(log_level):
+    # Check if the specified log level is valid
+    #   CRITICAL: Indicates a very serious error, typically leading to program termination.
+    #   ERROR:    Indicates an error that caused the program to fail to perform a specific function.
+    #   WARNING:  Indicates a warning that something unexpected happened
+    #   INFO:     Provides confirmation that things are working as expected
+    #   DEBUG:    Provides info useful for diagnosing problems
+    if log_level not in ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"):
+        print("Invalid log level. Please use one of: DEBUG, INFO, WARNING, ERROR, CRITICAL")
+        exit(1)
+
+    # Set up logging based on the parsed log level
+    logging.basicConfig(format='%(levelname)s:%(funcName)s: %(message)s', level=log_level, stream=sys.stdout)
+    logger = logging.getLogger(__name__)
+
+    # Create a StreamHandler with flush set to True
+    handler = logging.StreamHandler()
+    handler.flush = True
+    logger.addHandler(handler)
+
+    return logger
+
+#
 def location_ready_status(location, headers):
+    tries = 0
     while True:
         print('Checking report ready status')
-        response = requests.get(location, headers=headers, allow_redirects=False)
-        response.raise_for_status()
-        if response.status_code == 303 or response.status_code == 302:
-            break
-        nextPoll = int(response.json().get('suggestedNextPollTimeInMins', 1))
-        print(f'API Requested {nextPoll} minute(s) for report to complete...')
-        time.sleep(nextPoll * 10)
+        response = cdm.api_request("GET", location, headers, allow_redirects=False)
+        if response:
+            if response.status_code == 302 or response.status_code == 303:
+                # Handle the redirection as needed
+                # You might want to update the 'location' variable with the new URL
+                location = response.headers['Location']
+                break
+            else:
+                print(f'API Requested {nextPoll} minute(s) for report to complete...')
+                nextPoll = int(response.json().get('suggestedNextPollTimeInMins', 1))
+                time.sleep(nextPoll * 10)
+        else:
+            # failed to get a valid respone from Cisco.  Try 3 more times max
+            tries += 1
+            if tries > 3:
+                logging.critical("Failed to get a valid response after 3 attempts.")
+                location = None
+                break
+        # end if
+    # end while
     print('Downloading Report...')
     return location
-
 
 def proccess_sandbox_files(filename, customerid, reportid, json_filename):
     with zipfile.ZipFile(filename, mode="r") as archive:
         for jsonfile in archive.namelist():
             print(f'Correcting Sandbox file name')
             os.rename((temp_dir + jsonfile), (temp_dir + customerid + reportid + json_filename))
-
 
 # Function explain usage
 def usage():
@@ -549,8 +390,6 @@ def usage():
 
 # Function to load configuration from config.ini and continue or create a template if not found and exit
 def load_config(customer):
-    global pxc_client_id
-    global pxc_client_secret
     global s3access_key
     global s3access_secret
     global s3bucket_folder
@@ -566,10 +405,10 @@ def load_config(customer):
 
     config = ConfigParser()
     if os.path.isfile(configFile):
-        print('********************** CISCO PX Cloud Data Miner *********************\n')
-        print(f'********************* Minning Data for {customer} ********************\n')
-        print("******************************************************************")
-        print('Config.ini file was found, continuing...')
+        print(f'********************** CISCO PX Cloud Data Miner *********************')
+        print(f'********************* Minning Data for {customer} ********************')
+        print(f"**********************************************************************\n")
+        print(f"Config.ini file was found, continuing...")
         config.read(configFile)
 
         # customer name cant be 'settings'
@@ -584,8 +423,8 @@ def load_config(customer):
             usage()
 
         # [credentials]
-        pxc_client_id = (config[customer]['pxc_client_id'])
-        pxc_client_secret = (config[customer]['pxc_client_secret'])
+        cdm.clientId = (config[customer]['clientId'])
+        cdm.clientSecret = (config[customer]['clientSecret'])
         s3access_key = (config[customer]['s3access_key'])
         s3access_secret = (config[customer]['s3access_secret'])
         s3bucket_folder = (config[customer]['s3bucket_folder'])
@@ -605,9 +444,9 @@ def load_config(customer):
         print('Config.ini not found!!!!!!!!!!!!\nCreating config.ini...')
         print('\nNOTE: you must edit the config.ini file with your information\nExiting...')
         config.add_section('credentials')
-        config.set("credentials", "pxc_client_id", "")
+        config.set("credentials", "clientId", "")
         config.set("credentials", "# PX Cloud API Client ID  Default is blank", "")
-        config.set("credentials", "pxc_client_secret", "")
+        config.set("credentials", "clientSecret", "")
         config.set("credentials", "# PX Cloud API Client Secret  Default is blank", "")
         config.set("credentials", "s3access_key", "")
         config.set("credentials", "# AWS S3 Access Key Default is blank", "")
@@ -674,33 +513,27 @@ def s3_storage():
 
 # Function to get the raw API JSON data from PX Cloud
 def get_json_reply(url, tag):
-    wait_time = 2	# default to 2 seconds delay
     tries = 1
     response = []
-    while True:
-        try:
-            pxc_refresh_token()
-            headers = {
-                'Authorization': f'Bearer {token}'
-            }
-            response = pxc_api_request("GET", url, headers, payload)
-            if response:
-                reply = json.loads(response.text)
-                items = reply[tag]
 
-                try:
-                    if response.status_code == 200:
-                        if len(items) > 0:
-                            if tries >= 2:
-                                logging.info("\nSuccess on retry! \nContinuing.")
-                                return items
-                finally:
-                    if response.status_code == 200:
-                        return items
+    while tries < 3:
+        try:
+            cdm.token_refresh()
+            headers = cdm.api_header()
+            response = cdm.api_request("GET", url, headers, data=payload)
+            if response and response.status_code == 200:
+                reply = json.loads(response.text)
+                items = reply.get(tag, [])
+                if items:
+                    logging.debug("\nSuccess! \nContinuing.")
+                    return items
+
             else:
                 logging.error("\nEmpty response received. Retrying...\n")
             
         except Exception as Error:
+            logging.error(f"An error occurred: {e}\nRetrying...")
+
             if response:
                 if response.text.__contains__("Customer admin has not provided access."):
                     logging.info("\nResponse Body:", response.content)
@@ -709,22 +542,18 @@ def get_json_reply(url, tag):
                     break
 
                 elif response.text.__contains__("Not found"):
-                    logging.info("\nResponse Body:", response.content)
+                    logging.warning("\nResponse Body:", response.content)
                     if tag == "items":
                         logging.warning("No Data Found....Skipping")
                     break
 
-                if tag == "items":
-                    print("\nResponse Content:", response.content)
-                    print("\nAttempt #", tries, "Failed getting:", Error,
-                          "\nRetrying in", wait_time, "seconds\n")
-                    time.sleep(wait_time)
-
-            if tries >= 3:
-                logging.warning("Failed to get JSON reply... Skipping")
-                break
         finally:
             tries += 1
+
+    # end while
+    logging.critical("Failed to get JSON reply... Skipping")
+    return []
+
 
 # Function to get the Customer List from PX Cloud
 # The objective of this API is to provide the list of all the customers
@@ -735,13 +564,14 @@ def pxc_get_customers():
     print("****************** Running Customer Report ***********************")
     print("******************************************************************")
     print("Searching ......\n", end="")
-    if debug_level == 1 or debug_level == 2:
-        now = datetime.now()
-        print('Start DateTime:', now)
+    now = datetime.now()
+    logging.debug(f'Start DateTime:{now}')
+
     totalCount = (get_json_reply(url=(pxc_url_customers + "?max=" + max_items), tag="totalCount"))
     if not totalCount:
-        print("No Customers found...., exiting....")
+        logging.critical("No Customers found...., exiting....")
         sys.exit()
+
     pages = math.ceil(totalCount / int(max_items))
     page = 0
     with open(customers, 'w', encoding="utf-8", newline='') as target:
@@ -778,13 +608,13 @@ def pxc_get_customers():
             if items is not None:
                 if len(items) > 0:
                     with open(json_output_dir +
-                              PageOfFileName("Customers", page, pages), 'w') as json_file:
+                              cdm.pageofname("Customers", page, pages), 'w') as json_file:
                         json.dump(items, json_file)
                     print(f"Saving {json_file.name}")
+
     print("\nSearch Completed!")
-    if debug_level == 1 or debug_level == 2:
-        now = datetime.now()
-        print('Stop DateTime:', now)
+    now = datetime.now()
+    logging.debug(f'Stop DateTime:{now}')
     print("====================\n")
 
 
@@ -797,9 +627,9 @@ def pxc_get_contracts():
     print("****************** Running Contract Report ***********************")
     print("******************************************************************")
     print("Searching ......")
-    if debug_level == 1 or debug_level == 2:
-        now = datetime.now()
-        print('Start DateTime:', now)
+    now = datetime.now()
+    logging.debug(f'Start DateTime:{now}')
+
     totalCount = (get_json_reply(url=(pxc_url_contracts + "?max=" + max_items), tag="totalCount"))
     pages = math.ceil(totalCount / int(max_items))
     page = 0
@@ -819,7 +649,7 @@ def pxc_get_contracts():
         writer = csv.writer(target, delimiter=' ', quotechar=' ', quoting=csv.QUOTE_NONE)
         writer.writerow(CSV_Header.split())
         while page < pages:
-            pxc_refresh_token()
+            cdm.token_refresh()
             off_set = (page * int(max_items))
             url = (pxc_url_contracts +
                    "?offset=" + str(off_set) +
@@ -853,7 +683,7 @@ def pxc_get_contracts():
                 endDate = str(item['endDate'])
                 currencySymbol = str(item['currencySymbol'])
                 onboardedstatus = str(item['onboardedstatus'])
-                print(f"Found contract number {contractNumber} for {customerName}")
+                logging.info(f"Found Contract Number {contractNumber} for {customerName}")
                 CSV_Data = (customerName + ',' +
                             contractNumber + ',' +
                             cuid + ',' +
@@ -871,7 +701,7 @@ def pxc_get_contracts():
                 if items is not None:
                     if len(items) > 0:
                         with open(json_output_dir + 
-                                  PageOfFileName("Contracts", page, pages), 'w') as json_file:
+                                  cdm.pageofname("Contracts", page, pages), 'w') as json_file:
                             json.dump(items, json_file)
                             print(f"Saving {json_file.name}")
 
@@ -902,10 +732,10 @@ def pxc_get_contracts():
         print(f'Total Contracts: {totalNum}')
         print(f'Duplicated Contracts: {numOfDups}')
         print(f'Unique Contracts: {totalNum - numOfDups}')
-    if debug_level == 1 or debug_level == 2:
-        now = datetime.now()
-        print('Stop DateTime:', now)
+
     print("\nSearch Completed!")
+    now = datetime.now()
+    logging.debug(f'Stop DateTime:{now}')
     print("====================\n")
 
 
@@ -918,9 +748,9 @@ def pxc_get_contractswithcustomers():
     print("******** Running Contracts With Customer Names Report ************")
     print("******************************************************************")
     print("Searching ......")
-    if debug_level == 1 or debug_level == 2:
-        now = datetime.now()
-        print('Start DateTime:', now)
+    now = datetime.now()
+    logging.debug(f'Start DateTime:{now}')
+
     totalCount = (get_json_reply(url=(pxc_url_contractswithcustomers + "?max=" + max_items), tag="totalCount"))
     pages = math.ceil(totalCount / int(max_items))
     page = 0
@@ -939,7 +769,7 @@ def pxc_get_contractswithcustomers():
         writer = csv.writer(target, delimiter=' ', quotechar=' ', quoting=csv.QUOTE_NONE)
         writer.writerow(CSV_Header.split())
         while page < pages:
-            pxc_refresh_token()
+            cdm.token_refresh()
             off_set = (page * int(max_items))
             url = (pxc_url_contractswithcustomers +
                    "?offset=" + str(off_set) +
@@ -974,7 +804,7 @@ def pxc_get_contractswithcustomers():
                 except KeyError:
                     successTrackIds = ""
                 for successTrackId in successTrackIds:
-                    print(f"Found contract number {contractNumber} for {customerGUName}")
+                    logging.info(f"Found Contract Number {contractNumber} for {customerGUName}")
                     CSV_Data = (customerName + ',' +
                                 customerId + ',' +
                                 contractNumber + ',' +
@@ -991,13 +821,13 @@ def pxc_get_contractswithcustomers():
                 if items is not None:
                     if len(items) > 0:
                         with open(json_output_dir + 
-                                  PageOfFileName("ContractsWithNames", page, pages), 'w') as json_file:
+                                  cdm.pageofname("ContractsWithNames", page, pages), 'w') as json_file:
                             json.dump(items, json_file)
                             print(f"Saving {json_file.name}")
-    if debug_level == 1 or debug_level == 2:
-        now = datetime.now()
-        print('Stop DateTime:', now)
+
     print("\nSearch Completed!")
+    now = datetime.now()
+    logging.debug(f'Stop DateTime:{now}')
     print("====================\n")
 
 
@@ -1010,9 +840,9 @@ def pxc_get_contracts_details():
     print("****************** Running Contract Details **********************")
     print("******************************************************************")
     print("Searching ......")
-    if debug_level == 1 or debug_level == 2:
-        now = datetime.now()
-        print('Start DateTime:', now)
+    now = datetime.now()
+    logging.debug(f'Start DateTime:{now}')
+
     if outputFormat == 1 or outputFormat == 3:
         with open(contractDetails, 'w', encoding="utf-8", newline='') as target:
             CSV_Header = "customerName," \
@@ -1034,7 +864,7 @@ def pxc_get_contracts_details():
     with open(csv_output_dir + 'unique_contracts.csv', 'r') as target:
         contractList = csv.DictReader(target)
         for row in contractList:
-            pxc_refresh_token()
+            cdm.token_refresh()
             customerName = "None"
             contractNumber = "None"
 
@@ -1050,13 +880,13 @@ def pxc_get_contracts_details():
                 print("No contractNumber for Row:", row) 
                 continue
 
-            headers = {'Authorization': f'Bearer {token}'}
+            headers = cdm.api_header()
             url = (pxc_url_contracts_details +
                    "?contractNumber=" + contractNumber +
                    "&offset=0&max=50"
                    )
             print(f"\nScanning {customerName}")
-            response = pxc_api_request("GET", url, headers, payload)
+            response = cdm.api_request("GET", url, headers, data=payload)
             if response and hasattr(response, 'text'):
                 reply = json.loads(response.text)
             else:
@@ -1073,9 +903,10 @@ def pxc_get_contracts_details():
                               "\n====================")
                     page = 1
                     if totalCount > 0:
-                        print(f"Found contract number {contractNumber}")
+                        logging.info(f"Found Contract Number {contractNumber}")
                     if totalCount < 1:
-                        print(f"No details found for contract number {contractNumber}")
+                        logging.warning(f"No details found for Contract Number {contractNumber}")
+
                     while page <= pages:
                         off_set = ((page + 1) * int(max_items))
                         url = (pxc_url_contracts_details +
@@ -1088,8 +919,8 @@ def pxc_get_contracts_details():
                             if items is not None:
                                 if len(items) > 0:
                                     page_name = "_Contract_Details_" + contractNumber
-                                    json_file = (json_output_dir + WindowsFileName(customerName) +
-                                                 PageOfFileName(page_name, page, pages))
+                                    json_file = (json_output_dir + cdm.filename(customerName) +
+                                                 cdm.pageofname(page_name, page, pages))
                                     if not os.path.isfile(json_file):
                                         with open(json_file, 'w') as fileTarget:
                                             json.dump(items, fileTarget)
@@ -1137,12 +968,11 @@ def pxc_get_contracts_details():
             except KeyError:
                 print("No Contract Data to process... Skipping.")
                 pass
-    print("\nSearch Completed!")
-    if debug_level == 1 or debug_level == 2:
-        now = datetime.now()
-        print('Stop DateTime:', now)
-    print("====================\n")
 
+    print("\nSearch Completed!")
+    now = datetime.now()
+    logging.debug(f'Stop DateTime:{now}')
+    print("====================\n")
 
 # Function to get the Partner Offers from PX Cloud
 # This API will fetch all the offers created by the Partners.
@@ -1153,9 +983,9 @@ def pxc_get_partner_offers():
     print("**************** Running All Partner Offers **********************")
     print("******************************************************************")
     print("Searching ......\n", end="")
-    if debug_level == 1 or debug_level == 2:
-        now = datetime.now()
-        print('Start DateTime:', now)
+    now = datetime.now()
+    logging.debug(f'Start DateTime:{now}')
+
     if outputFormat == 1 or outputFormat == 3:
         with open(partnerOffers, 'w', encoding="utf-8", newline='') as target:
             CSV_Header = "customerId," \
@@ -1289,10 +1119,10 @@ def pxc_get_partner_offers():
                 with open(json_output_dir + "Partner_Offers.json", 'w') as json_file:
                     json.dump(items, json_file)
                 print(f"Saving {json_file.name}")
+
     print("\nSearch Completed!")
-    if debug_level == 1 or debug_level == 2:
-        now = datetime.now()
-        print('Stop DateTime:', now)
+    now = datetime.now()
+    logging.debug(f'Stop DateTime:{now}')
     print("====================\n")
 
 
@@ -1305,9 +1135,9 @@ def pxc_get_partner_offer_sessions():
     print("************** Running All Partner Offers Sessions ***************")
     print("******************************************************************")
     print("Searching ......\n", end="")
-    if debug_level == 1 or debug_level == 2:
-        now = datetime.now()
-        print('Start DateTime:', now)
+    now = datetime.now()
+    logging.debug(f'Start DateTime:{now}')
+
     if outputFormat == 1 or outputFormat == 3:
         with open(partnerOfferSessions, 'w', encoding="utf-8", newline='') as target:
             CSV_Header = "customerId," \
@@ -1406,10 +1236,10 @@ def pxc_get_partner_offer_sessions():
                 with open(json_output_dir + 'Partner_Offer_Sessions.json', 'w') as json_file:
                     json.dump(items, json_file)
                 print(f"Saving {json_file.name}")
+
     print("\nSearch Completed!")
-    if debug_level == 1 or debug_level == 2:
-        now = datetime.now()
-        print('Stop DateTime:', now)
+    now = datetime.now()
+    logging.debug(f'Stop DateTime:{now}')
     print("====================\n")
 
 
@@ -1422,9 +1252,9 @@ def pxc_get_successtracks():
     print("******************** Running Success Track ***********************")
     print("******************************************************************")
     print("Searching ......\n", end="")
-    if debug_level == 1 or debug_level == 2:
-        now = datetime.now()
-        print('Start DateTime:', now)
+    now = datetime.now()
+    logging.debug(f'Start DateTime:{now}')
+
     if outputFormat == 1 or outputFormat == 3:
         with open(successTracks, 'w', encoding="utf-8", newline='') as target:
             CSV_Header = "successTracksId," \
@@ -1476,10 +1306,10 @@ def pxc_get_successtracks():
             break
         finally:
             tries += 1
+
     print("\nSearch Completed!")
-    if debug_level == 1 or debug_level == 2:
-        now = datetime.now()
-        print('Stop DateTime:', now)
+    now = datetime.now()
+    logging.debug(f'Stop DateTime:{now}')
     print("====================\n")
 
 
@@ -1492,9 +1322,9 @@ def pxc_assets_reports():
     print("********************* Running Asset Report ***********************")
     print("******************************************************************")
     print("Searching ......")
-    if debug_level == 1 or debug_level == 2:
-        now = datetime.now()
-        print('Start DateTime:', now)
+    now = datetime.now()
+    logging.debug(f'Start DateTime:{now}')
+
     if outputFormat == 1 or outputFormat == 3:
         with open(assets, 'w', encoding="utf-8", newline='') as target:
             CSV_Header = "customerId," \
@@ -1552,11 +1382,11 @@ def pxc_assets_reports():
             customerName = row['customerName']
             print(f"\nRequesting Asset data for {customerName}")
             if not successTrackId == "N/A":
-                pxc_refresh_token()
+                cdm.token_refresh()
                 url = (pxc_url_customers + "/" + customerId + "/reports")
                 data_payload = json.dumps({"reportName": "Assets", "successTrackId": successTrackId})
-                headers = {'Authorization': f'Bearer {token}'}
-                response = pxc_api_request("POST", url, headers, data_payload)
+                headers = cdm.api_header()
+                response = cdm.api_request("POST", url, headers, data=data_payload)
                 if not response:
                     print("Asset Report missing response.. continuing")
                     continue
@@ -1586,7 +1416,7 @@ def pxc_assets_reports():
                             print("Making API Call again with the following...")
                             print("URL: ", url)
                             print("Data Payload: ", data_payload)
-                            response = px.request("POST", url, headers, data_payload)
+                            response = px.request("POST", url, headers, data=data_payload)
                             print("Report request URL:", url,
                                   "\nReport details:", data_payload,
                                   "\nHTTP Code:", response.status_code,
@@ -1602,8 +1432,8 @@ def pxc_assets_reports():
                         time.sleep(wait_time * tries)
                         print("Scanning for data...")
                         filename = (temp_dir + customerId + "_Assets_" + location.split('/')[-1] + '.zip')
-                        headers = {'Authorization': f'Bearer {token}'}
-                        response = pxc_api_request("GET", location, headers, payload)
+                        headers = cdm.api_header()
+                        response = cdm.api_request("GET", location, headers, payload)
                         try:
                             with open(filename, 'wb') as file:
                                 file.write(response.content)
@@ -1852,10 +1682,10 @@ def pxc_assets_reports():
             else:
                 print(f"No Asset Data Found for Success Track {successTrackId}"
                       f"\nSkipping this record and continuing....")
+
     print("\nSearch Completed!")
-    if debug_level == 1 or debug_level == 2:
-        now = datetime.now()
-        print('Stop DateTime:', now)
+    now = datetime.now()
+    logging.debug(f'Stop DateTime:{now}')
     print("====================\n\n")
 
 
@@ -1868,9 +1698,9 @@ def pxc_hardware_reports():
     print("****************** Running Hardware Report ***********************")
     print("******************************************************************")
     print("Searching ......")
-    if debug_level == 1 or debug_level == 2:
-        now = datetime.now()
-        print('Start DateTime:', now)
+    now = datetime.now()
+    logging.debug(f'Start DateTime:{now}')
+
     if outputFormat == 1 or outputFormat == 3:
         with open(hardware, 'w', encoding="utf-8", newline='') as target:
             CSV_Header = "customerId," \
@@ -1903,11 +1733,11 @@ def pxc_hardware_reports():
             customerName = row['customerName']
             print(f"\nRequesting hardware data for {customerName}")
             if not successTrackId == "N/A":
-                pxc_refresh_token()
+                cdm.token_refresh()
                 url = (pxc_url_customers + "/" + customerId + "/reports")
                 data_payload = json.dumps({"reportName": "hardware", "successTrackId": successTrackId})
-                headers = {'Authorization': f'Bearer {token}'}
-                response = pxc_api_request("POST", url, headers, data_payload)
+                headers = cdm.api_header()
+                response = cdm.api_request("POST", url, headers, data=data_payload)
                 if not response:
                     print("Hardware Report missing response.. continuing")
                     continue
@@ -1933,7 +1763,7 @@ def pxc_hardware_reports():
                             print("Making API Call again with the following...")
                             print("URL: ", url)
                             print("Data Payload: ", data_payload)
-                            response = pxc_api_request("POST", url, headers, data_payload)
+                            response = cdm.api_request("POST", url, headers, data=data_payload)
                             print(f"Review for  {customerName} on Success Track {successTrackId} "
                                   f"Report Failed to Download\n")
                         #end while
@@ -1946,8 +1776,8 @@ def pxc_hardware_reports():
                         time.sleep(tries)
                         print("Scanning for data...")
                         filename = (temp_dir + location.split('/')[-1] + '.zip')
-                        headers = {'Authorization': f'Bearer {token}'}
-                        response = pxc_api_request("GET", location, headers, payload)
+                        headers = cdm.api_header()
+                        response = cdm.api_request("GET", location, headers, payload)
 
                         try:
                             if response:
@@ -2078,10 +1908,10 @@ def pxc_hardware_reports():
             else:
                 print(f"No Hardware Data Found for Success Track {successTrackId}"
                       f"\nSkipping this record and continuing....")
+
     print("\nSearch Completed!")
-    if debug_level == 1 or debug_level == 2:
-        now = datetime.now()
-        print('Stop DateTime:', now)
+    now = datetime.now()
+    logging.debug(f'Stop DateTime:{now}')
     print("====================\n")
 
 
@@ -2094,9 +1924,9 @@ def pxc_software_reports():
     print("******************* Running Software Report **********************")
     print("******************************************************************")
     print("Searching ......")
-    if debug_level == 1 or debug_level == 2:
-        now = datetime.now()
-        print('Start DateTime:', now)
+    now = datetime.now()
+    logging.debug(f'Start DateTime:{now}')
+
     if outputFormat == 1 or outputFormat == 3:
         with open(software, 'w', encoding="utf-8", newline='') as target:
             CSV_Header = "customerId," \
@@ -2123,11 +1953,11 @@ def pxc_software_reports():
             customerName = row['customerName']
             print(f"\nRequesting software data for {customerName}")
             if not successTrackId == "N/A":
-                pxc_refresh_token()
+                cdm.token_refresh()
                 url = (pxc_url_customers + "/" + customerId + "/reports")
                 data_payload = json.dumps({"reportName": "software", "successTrackId": successTrackId})
-                headers = {'Authorization': f'Bearer {token}'}
-                response = pxc_api_request("POST", url, headers, data_payload)
+                headers = cdm.api_header()
+                response = cdm.api_request("POST", url, headers, data=data_payload)
                 if not response:
                     print("Software Report missing response.. continuing")
                     continue
@@ -2157,7 +1987,7 @@ def pxc_software_reports():
                             print("Making API Call again with the following...")
                             print("URL: ", url)
                             print("Data Payload: ", data_payload)
-                            response = pxc_api_request("POST", url, headers, data_payload)
+                            response = cdm.api_request("POST", url, headers, data=data_payload)
                             print("Review for", "Customer:", customerName, "on Success Track ", successTrackId,
                                   "Report Failed to Download\n")
                     location = response.headers["location"]
@@ -2168,8 +1998,8 @@ def pxc_software_reports():
                         time.sleep(tries)
                         print("Scanning for data...")
                         filename = (temp_dir + location.split('/')[-1] + '.zip')
-                        headers = {'Authorization': f'Bearer {token}'}
-                        response = pxc_api_request("GET", location, headers, payload)
+                        headers = cdm.api_header()
+                        response = cdm.api_request("GET", location, headers, payload)
                         if response and debug_level == 2:
                             print("\nLocation URL Returned:", location,
                                   "\nHTTP Code:", response.status_code,
@@ -2284,10 +2114,10 @@ def pxc_software_reports():
             else:
                 print(f"No Software Data Found For Success Track {successTrackId}"
                       f"\nSkipping this record and continuing....")
+
     print("\nSearch Completed!")
-    if debug_level == 1 or debug_level == 2:
-        now = datetime.now()
-        print('Stop DateTime:', now)
+    now = datetime.now()
+    logging.debug(f'Stop DateTime:{now}')
     print("====================\n")
 
 
@@ -2300,9 +2130,9 @@ def pxc_purchased_licenses_reports():
     print("****************** Running Purchased Licenses ********************")
     print("******************************************************************")
     print("Searching ......")
-    if debug_level == 1 or debug_level == 2:
-        now = datetime.now()
-        print('Start DateTime:', now)
+    now = datetime.now()
+    logging.debug(f'Start DateTime:{now}')
+
     if outputFormat == 1 or outputFormat == 3:
         with open(purchasedLicenses, 'w', encoding="utf-8", newline='') as target:
             CSV_Header = "customerId," \
@@ -2325,11 +2155,11 @@ def pxc_purchased_licenses_reports():
             customerName = row['customerName']
             print(f"\nRequesting purchased Licenses data for {customerName}")
             if not successTrackId == "N/A":
-                pxc_refresh_token()
+                cdm.token_refresh()
                 url = (pxc_url_customers + "/" + customerId + "/reports")
                 data_payload = json.dumps({"reportName": "PurchasedL4icenses", "successTrackId": successTrackId})
-                headers = {'Authorization': f'Bearer {token}'}
-                response = pxc_api_request("POST", url, headers, data_payload)
+                headers = cdm.api_header()
+                response = cdm.api_request("POST", url, headers, data=data_payload)
                 if not response:
                     print("Purchased License Report missing response.. continuing")
                     continue
@@ -2359,7 +2189,7 @@ def pxc_purchased_licenses_reports():
                             print("Making API Call again with the following...")
                             print("URL: ", url)
                             print("Data Payload: ", data_payload)
-                            response = pxc_api_request("POST", url, headers, data_payload)
+                            response = cdm.api_request("POST", url, headers, data=data_payload)
                             print("Report request URL:", url,
                                   "\nReport details:", data_payload,
                                   "\nHTTP Code:", response.status_code,
@@ -2375,8 +2205,8 @@ def pxc_purchased_licenses_reports():
                         time.sleep(tries)
                         print("Scanning for data...")
                         filename = (temp_dir + location.split('/')[-1] + '.zip')
-                        headers = {'Authorization': f'Bearer {token}'}
-                        response = pxc_api_request("GET", location, headers, payload)
+                        headers = cdm.api_header()
+                        response = cdm.api_request("GET", location, headers, payload)
 
                         try:
                             with open(filename, 'wb') as file:
@@ -2475,10 +2305,10 @@ def pxc_purchased_licenses_reports():
             else:
                 print(f"No Purchased Licenses Data Found For Success Track {successTrackId}"
                       f"\nSkipping this record and continuing....")
+
     print("\nSearch Completed!")
-    if debug_level == 1 or debug_level == 2:
-        now = datetime.now()
-        print('Stop DateTime:', now)
+    now = datetime.now()
+    logging.debug(f'Stop DateTime:{now}')
     print("====================\n")
 
 
@@ -2491,9 +2321,9 @@ def pxc_licenses_reports():
     print("******************** Running License Report **********************")
     print("******************************************************************")
     print("Searching ......")
-    if debug_level == 1 or debug_level == 2:
-        now = datetime.now()
-        print('Start DateTime:', now)
+    now = datetime.now()
+    logging.debug(f'Start DateTime:{now}')
+
     if outputFormat == 1 or outputFormat == 3:
         with open(licenses, 'w', encoding="utf-8", newline='') as target:
             CSV_Header = "customerId," \
@@ -2521,11 +2351,11 @@ def pxc_licenses_reports():
             customerName = row['customerName']
             print(f"\nRequesting license data for {customerName}")
             if not successTrackId == "N/A":
-                pxc_refresh_token()
+                cdm.token_refresh()
                 url = (pxc_url_customers + "/" + customerId + "/reports")
                 data_payload = json.dumps({"reportName": "Licenses", "successTrackId": successTrackId})
-                headers = {'Authorization': f'Bearer {token}'}
-                response = pxc_api_request("POST", url, headers, data_payload)
+                headers = cdm.api_header()
+                response = cdm.api_request("POST", url, headers, data=data_payload)
                 if not response:
                     print("License Report missing response.. continuing")
                     continue
@@ -2554,7 +2384,7 @@ def pxc_licenses_reports():
                             print("Making API Call again with the following...")
                             print("URL: ", url)
                             print("Data Payload: ", data_payload)
-                            response = pxc_api_request("POST", url, headers, data_payload)
+                            response = cdm.api_request("POST", url, headers, data=data_payload)
                             print("Report request URL:", url,
                                   "\nReport details:", data_payload,
                                   "\nHTTP Code:", response.status_code,
@@ -2570,8 +2400,8 @@ def pxc_licenses_reports():
                         time.sleep(tries)
                         print("Scanning for data...")
                         filename = (temp_dir + location.split('/')[-1] + '.zip')
-                        headers = {'Authorization': f'Bearer {token}'}
-                        response = pxc_api_request("GET", location, headers, payload)
+                        headers = cdm.api_header()
+                        response = cdm.api_request("GET", location, headers, payload)
 
                         try:
                             with open(filename, 'wb') as file:
@@ -2691,10 +2521,10 @@ def pxc_licenses_reports():
             else:
                 print(f"No License Data Found For Success Track {successTrackId}"
                       f"\nSkipping this record and continuing....")
+
     print("\nSearch Completed!")
-    if debug_level == 1 or debug_level == 2:
-        now = datetime.now()
-        print('Stop DateTime:', now)
+    now = datetime.now()
+    logging.debug(f'Stop DateTime:{now}')
     print("====================\n")
 
 
@@ -2707,9 +2537,9 @@ def pxc_security_advisories_reports():
     print("****************** Running Security Advisories *******************")
     print("******************************************************************")
     print("Searching ......")
-    if debug_level == 1 or debug_level == 2:
-        now = datetime.now()
-        print('Start DateTime:', now)
+    now = datetime.now()
+    logging.debug(f'Start DateTime:{now}')
+
     if outputFormat == 1 or outputFormat == 3:
         with open(securityAdvisories, 'w', encoding="utf-8", newline='') as target:
             CSV_Header = "customerId," \
@@ -2744,11 +2574,11 @@ def pxc_security_advisories_reports():
             customerName = row['customerName']
             print(f"\nRequesting security Advisories for {customerName}")
             if not successTrackId == "N/A":
-                pxc_refresh_token()
+                cdm.token_refresh()
                 url = (pxc_url_customers + "/" + customerId + "/reports")
                 data_payload = json.dumps({"reportName": "securityadvisories", "successTrackId": successTrackId})
-                headers = {'Authorization': f'Bearer {token}'}
-                response = pxc_api_request("POST", url, headers, data_payload)
+                headers = cdm.api_header()
+                response = cdm.api_request("POST", url, headers, data=data_payload)
                 if not response:
                     print("Security Advisories missing response.. continuing")
                     continue
@@ -2777,7 +2607,7 @@ def pxc_security_advisories_reports():
                             print("Making API Call again with the following...")
                             print("URL: ", url)
                             print("Data Payload: ", data_payload)
-                            response = pxc_api_request("POST", url, headers, data_payload)
+                            response = cdm.api_request("POST", url, headers, data=data_payload)
                             print("Report request URL:", url,
                                   "\nReport details:", data_payload,
                                   "\nHTTP Code:", response.status_code,
@@ -2793,8 +2623,8 @@ def pxc_security_advisories_reports():
                         time.sleep(tries)
                         print("Scanning for data...")
                         filename = (temp_dir + location.split('/')[-1] + '.zip')
-                        headers = {'Authorization': f'Bearer {token}'}
-                        response = pxc_api_request("GET", location, headers, payload)
+                        headers = cdm.api_header()
+                        response = cdm.api_request("GET", location, headers, payload)
 
                         try:
                             with open(filename, 'wb') as file:
@@ -2912,10 +2742,10 @@ def pxc_security_advisories_reports():
             else:
                 print(f"No Security Advisories Data Found For Success Track {successTrackId}"
                       f"\nSkipping this record and continuing....")
+
     print("\nSearch Completed!")
-    if debug_level == 1 or debug_level == 2:
-        now = datetime.now()
-        print('Stop DateTime:', now)
+    now = datetime.now()
+    logging.debug(f'Stop DateTime:{now}')
     print("====================\n")
 
 
@@ -2928,9 +2758,9 @@ def pxc_field_notices_reports():
     print("******************** Running Field Notices ***********************")
     print("******************************************************************")
     print("Searching ......")
-    if debug_level == 1 or debug_level == 2:
-        now = datetime.now()
-        print('Start DateTime:', now)
+    now = datetime.now()
+    logging.debug(f'Start DateTime:{now}')
+
     if outputFormat == 1 or outputFormat == 3:
         with open(fieldNotices, 'w', encoding="utf-8", newline='') as target:
             CSV_Header = "customerId," \
@@ -2962,11 +2792,11 @@ def pxc_field_notices_reports():
             customerName = row['customerName']
             print(f"\nRequesting Field Notices for {customerName}")
             if not successTrackId == "N/A":
-                pxc_refresh_token()
+                cdm.token_refresh()
                 url = (pxc_url_customers + "/" + customerId + "/reports")
                 data_payload = json.dumps({"reportName": "FieldNotices", "successTrackId": successTrackId})
-                headers = {'Authorization': f'Bearer {token}'}
-                response = pxc_api_request("POST", url, headers, data_payload)
+                headers = cdm.api_header()
+                response = cdm.api_request("POST", url, headers, data=data_payload)
                 if not response:
                     print("Feild Notices Report missing response.. continuing")
                     continue
@@ -2995,7 +2825,7 @@ def pxc_field_notices_reports():
                             print("Making API Call again with the following...")
                             print("URL: ", url)
                             print("Data Payload: ", data_payload)
-                            response = pxc_api_request("POST", url, headers, data_payload)
+                            response = cdm.api_request("POST", url, headers, data=data_payload)
                             print("Report request URL:", url,
                                   "\nReport details:", data_payload,
                                   "\nHTTP Code:", response.status_code,
@@ -3011,8 +2841,8 @@ def pxc_field_notices_reports():
                         time.sleep(tries)
                         print("Scanning for data...")
                         filename = (temp_dir + location.split('/')[-1] + '.zip')
-                        headers = {'Authorization': f'Bearer {token}'}
-                        response = pxc_api_request("GET", location, headers, payload)
+                        headers = cdm.api_header()
+                        response = cdm.api_request("GET", location, headers, payload)
 
                         try:
                             with open(filename, 'wb') as file:
@@ -3131,10 +2961,10 @@ def pxc_field_notices_reports():
             else:
                 print(f"No Field Notice Data Found For Success Track {successTrackId}"
                       f"\nSkipping this record and continuing....")
+
     print("\nSearch Completed!")
-    if debug_level == 1 or debug_level == 2:
-        now = datetime.now()
-        print('Stop DateTime:', now)
+    now = datetime.now()
+    logging.debug(f'Stop DateTime:{now}')
     print("====================\n")
 
 
@@ -3147,9 +2977,9 @@ def pxc_priority_bugs_reports():
     print("***************** Running Priority Bugs report *******************")
     print("******************************************************************")
     print("Searching ......")
-    if debug_level == 1 or debug_level == 2:
-        now = datetime.now()
-        print('Start DateTime:', now)
+    now = datetime.now()
+    logging.debug(f'Start DateTime:{now}')
+
     if outputFormat == 1 or outputFormat == 3:
         with open(priorityBugs, 'w', encoding="utf-8", newline='') as target:
             CSV_Header = "customerId," \
@@ -3177,11 +3007,11 @@ def pxc_priority_bugs_reports():
             customerName = row['customerName']
             print(f"\nRequesting priority Bugs for {customerName}")
             if not successTrackId == "N/A":
-                pxc_refresh_token()
+                cdm.token_refresh()
                 url = (pxc_url_customers + "/" + customerId + "/reports")
                 data_payload = json.dumps({"reportName": "prioritybugs", "successTrackId": successTrackId})
-                headers = {'Authorization': f'Bearer {token}'}
-                response = pxc_api_request("POST", url, headers, data_payload)
+                headers = cdm.api_header()
+                response = cdm.api_request("POST", url, headers, data=data_payload)
                 if not response:
                     print("Priority Bugs Report missing response.. continuing")
                     continue
@@ -3209,7 +3039,7 @@ def pxc_priority_bugs_reports():
                             print("Making API Call again with the following...")
                             print("URL: ", url)
                             print("Data Payload: ", data_payload)
-                            response = pxc_api_request("POST", url, headers, data_payload)
+                            response = cdm.api_request("POST", url, headers, data=data_payload)
                             print("Report request URL:", url,
                                   "\nReport details:", data_payload,
                                   "\nHTTP Code:", response.status_code,
@@ -3225,8 +3055,8 @@ def pxc_priority_bugs_reports():
                         time.sleep(tries)
                         print("Scanning for data...")
                         filename = (temp_dir + location.split('/')[-1] + '.zip')
-                        headers = {'Authorization': f'Bearer {token}'}
-                        response = pxc_api_request("GET", location, headers, payload)
+                        headers = cdm.api_header()
+                        response = cdm.api_request("GET", location, headers, payload)
 
                         try:
                             with open(filename, 'wb') as file:
@@ -3330,10 +3160,10 @@ def pxc_priority_bugs_reports():
             else:
                 print(f"No Priority Bug Data Found For Success Track {successTrackId}"
                       f"{successTrackId}\nSkipping this record and continuing....")
+
     print("\nSearch Completed!")
-    if debug_level == 1 or debug_level == 2:
-        now = datetime.now()
-        print('Stop DateTime:', now)
+    now = datetime.now()
+    logging.debug(f'Stop DateTime:{now}')
     print("====================\n")
 
 
@@ -3346,9 +3176,9 @@ def pxc_get_lifecycle():
     print("****************** Running Lifecycle Report **********************")
     print("******************************************************************")
     print("Searching ......\n", end="")
-    if debug_level == 1 or debug_level == 2:
-        now = datetime.now()
-        print('Start DateTime:', now)
+    now = datetime.now()
+    logging.debug(f'Start DateTime:{now}')
+
     if outputFormat == 1 or outputFormat == 3:
         with open(lifecycle, 'w', encoding="utf-8", newline='') as target:
             CSV_Header = "customerName," \
@@ -3371,7 +3201,7 @@ def pxc_get_lifecycle():
             successTrackId = row['successTrackId']
             print(f"\nSanning lifecycle data for {customerName} on Success Track {successTrackId}")
             if not successTrackId == "N/A":
-                pxc_refresh_token()
+                cdm.token_refresh()
                 items = (get_json_reply(url=(
                         pxc_url_customers + "/" +
                         customerId +
@@ -3426,10 +3256,10 @@ def pxc_get_lifecycle():
             else:
                 print(f"\nNo Data Found For  {customerName} on Success Track{successTrackId}"
                       f"\nSkipping this record and continuing....")
+
     print("\nSearch Completed!")
-    if debug_level == 1 or debug_level == 2:
-        now = datetime.now()
-        print('Stop DateTime:', now)
+    now = datetime.now()
+    logging.debug(f'Stop DateTime:{now}')
     print("====================\n")
 
 
@@ -3442,9 +3272,9 @@ def pxc_software_groups():
     print("******************* Running Software Groups **********************")
     print("******************************************************************")
     print("Searching ......\n", end="")
-    if debug_level == 1 or debug_level == 2:
-        now = datetime.now()
-        print('Start DateTime:', now)
+    now = datetime.now()
+    logging.debug(f'Start DateTime:{now}')
+
     if outputFormat == 1 or outputFormat == 3:
         with open(SWGroups, 'w', encoding="utf-8", newline='') as target:
             CSV_Header = "customerId," \
@@ -3471,7 +3301,7 @@ def pxc_software_groups():
             customerName = row['customerName']
             successTrackId = row['successTrackId']
             if not successTrackId == "N/A":
-                pxc_refresh_token()
+                cdm.token_refresh()
                 print(f"\nScanning {customerName}")
                 url = (pxc_url_customers + "/" +
                        customerId +
@@ -3484,7 +3314,7 @@ def pxc_software_groups():
                     if outputFormat == 1 or outputFormat == 2:
                         if items is not None:
                             if len(items) > 0:
-                                with open(json_output_dir + WindowsFileName(customerName) + "_SoftwareGroups.json",
+                                with open(json_output_dir + cdm.filename(customerName) + "_SoftwareGroups.json",
                                           'w') as json_file:
                                     json.dump(items, json_file)
                                 print(f"Saving {json_file.name}")
@@ -3525,10 +3355,10 @@ def pxc_software_groups():
                                 writer.writerow(CSV_Data.split())
                 else:
                     print("No Software Groups Data Found .... Skipping")
+
     print("\nSearch Completed!")
-    if debug_level == 1 or debug_level == 2:
-        now = datetime.now()
-        print('Stop DateTime:', now)
+    now = datetime.now()
+    logging.debug(f'Stop DateTime:{now}')
     print("====================\n")
 
 
@@ -3543,9 +3373,9 @@ def pxc_software_group_suggestions():
     print("************* Running Software Groups Suggestions ****************")
     print("******************************************************************")
     print("Searching ......\n", end="")
-    if debug_level == 1 or debug_level == 2:
-        now = datetime.now()
-        print('Start DateTime:', now)
+    now = datetime.now()
+    logging.debug(f'Start DateTime:{now}')
+
     if outputFormat == 1 or outputFormat == 3:
         with open(SWGroupSuggestionsTrend, 'w', encoding="utf-8", newline='') as target:
             CSV_Header = "customerId," \
@@ -3629,18 +3459,16 @@ def pxc_software_group_suggestions():
             successTrackId = row['successTrackId']
             suggestionId = row['suggestionId']
             if not successTrackId == "N/A":
-                pxc_refresh_token()
-                print(f"\nFound Software Group Suggestion for {customerName}")
+                cdm.token_refresh()
+                logging.info(f"\nFound Software Group Suggestion for {customerName}")
                 url = (pxc_url_customers + "/" +
                        customerId +
                        pxc_url_software_group_suggestions +
                        "?successTrackId=" + successTrackId +
                        "&suggestionId=" + suggestionId)
                 try:
-                    headers = {
-                        'Authorization': f'Bearer {token}'
-                    }
-                    response = pxc_api_request("GET", url, headers)
+                    headers = cdm.api_header()
+                    response = cdm.api_request("GET", url, headers)
                     if response and hasattr(response, 'text'):
                         reply = json.loads(response.text)
                     else:
@@ -3661,7 +3489,7 @@ def pxc_software_group_suggestions():
                 finally:
                     if outputFormat == 1 or outputFormat == 2:
                         if not jsonDump == []:
-                            with open(json_output_dir + WindowsFileName(customerName) + "_SoftwareGroup_Suggestions_" + successTrackId
+                            with open(json_output_dir + cdm.filename(customerName) + "_SoftwareGroup_Suggestions_" + successTrackId
                                       + "_" + suggestionId + ".json", 'w') as json_file:
                                 json.dump(jsonDump, json_file)
                             print(f"Saving {json_file.name}")
@@ -3941,10 +3769,10 @@ def pxc_software_group_suggestions():
                                         featuresCountFixedFeaturesCount
                                         )
                             writer.writerow(CSV_Data.split())
+
     print("\nSearch Completed!")
-    if debug_level == 1 or debug_level == 2:
-        now = datetime.now()
-        print('Stop DateTime:', now)
+    now = datetime.now()
+    logging.debug(f'Stop DateTime:{now}')
     print("====================\n")
 
 
@@ -3956,9 +3784,9 @@ def pxc_software_group_suggestions_assets():
     print("*********** Running Software Groups Suggestions Assets ***********")
     print("******************************************************************")
     print("Searching ......\n", end="")
-    if debug_level == 1 or debug_level == 2:
-        now = datetime.now()
-        print('Start DateTime:', now)
+    now = datetime.now()
+    logging.debug(f'Start DateTime:{now}')
+
     if outputFormat == 1 or outputFormat == 3:
         with open(SWGroupSuggestionAssets, 'w', encoding="utf-8", newline='') as target:
             CSV_Header = "customerId," \
@@ -3981,8 +3809,8 @@ def pxc_software_group_suggestions_assets():
             successTrackId = row['successTrackId']
             softwareGroupId = row['softwareGroupId']
             if not successTrackId == "N/A":
-                pxc_refresh_token()
-                print(f"\nFound Software Group ID {softwareGroupId} Suggestion Asset for {customerName}")
+                cdm.token_refresh()
+                logging.info(f"\nFound Software Group ID {softwareGroupId} Suggestion Asset for {customerName}")
                 url = (pxc_url_customers + "/" +
                        customerId +
                        pxc_url_software_group_suggestions_assets +
@@ -4027,10 +3855,10 @@ def pxc_software_group_suggestions_assets():
                                             softwareType + ',' +
                                             currentRelease)
                                 writer.writerow(CSV_Data.split())
+
     print("\nSearch Completed!")
-    if debug_level == 1 or debug_level == 2:
-        now = datetime.now()
-        print('Stop DateTime:', now)
+    now = datetime.now()
+    logging.debug(f'Stop DateTime:{now}')
     print("====================\n")
 
 
@@ -4043,9 +3871,9 @@ def pxc_software_group_suggestions_bug_list():
     print("********* Running Software Groups Suggestions Bug List ***********")
     print("******************************************************************")
     print("Searching ......\n", end="")
-    if debug_level == 1 or debug_level == 2:
-        now = datetime.now()
-        print('Start DateTime:', now)
+    now = datetime.now()
+    logging.debug(f'Start DateTime:{now}')
+
     if outputFormat == 1 or outputFormat == 3:
         with open(SWGroupSuggestionsBugList, 'w', encoding="utf-8", newline='') as target:
             CSV_Header = "customerId," \
@@ -4067,10 +3895,10 @@ def pxc_software_group_suggestions_bug_list():
             customerName = row['customerName']
             successTrackId = row['successTrackId']
             machineSuggestionId = row['machineSuggestionId']
-            headers = {'Authorization': f'Bearer {token}'}
+            headers = cdm.api_header()
             if not successTrackId == "N/A":
-                pxc_refresh_token()
-                print(f"\nFound machine suggestion ID of {machineSuggestionId} for {customerName}")
+                cdm.token_refresh()
+                logging.info(f"\nFound machine suggestion ID of {machineSuggestionId} for {customerName}")
                 url = (pxc_url_customers + "/" +
                        customerId +
                        pxc_url_software_group_suggestions_bugs +
@@ -4078,7 +3906,7 @@ def pxc_software_group_suggestions_bug_list():
                        "&max=" + max_items +
                        "&machineSuggestionId=" + machineSuggestionId +
                        "&successTrackId=" + successTrackId)
-            response = pxc_api_request("GET", url, headers, payload)
+            response = cdm.api_request("GET", url, headers, data=payload)
             if response and hasattr(response, 'text'):
                 reply = json.loads(response.text)
             else:
@@ -4104,8 +3932,8 @@ def pxc_software_group_suggestions_bug_list():
                         items = (get_json_reply(url, tag="items"))
                         if outputFormat == 1 or outputFormat == 2:
                             page_name = "_SoftwareGroup_Suggestions_Bug_Lists_" + machineSuggestionId
-                            with open(json_output_dir + WindowsFileName(customerName) +
-                                      PageOfFileName(page_name, page, pages), 'w') as json_file:
+                            with open(json_output_dir + cdm.filename(customerName) +
+                                      cdm.pageofname(page_name, page, pages), 'w') as json_file:
                                 json.dump(items, json_file)
                                 print(f"Saving {json_file.name}")
                         if outputFormat == 1 or outputFormat == 3:
@@ -4140,10 +3968,10 @@ def pxc_software_group_suggestions_bug_list():
             except KeyError:
                 print("No Data to process... Skipping.")
                 pass
+
     print("\nSearch Completed!")
-    if debug_level == 1 or debug_level == 2:
-        now = datetime.now()
-        print('Stop DateTime:', now)
+    now = datetime.now()
+    logging.debug(f'Stop DateTime:{now}')
     print("====================\n")
 
 
@@ -4156,9 +3984,9 @@ def pxc_software_group_suggestions_field_notices():
     print("******* Running Software Groups Suggestions Field Notices ********")
     print("******************************************************************")
     print("Searching ......\n", end="")
-    if debug_level == 1 or debug_level == 2:
-        now = datetime.now()
-        print('Start DateTime:', now)
+    now = datetime.now()
+    logging.debug(f'Start DateTime:{now}')
+
     if outputFormat == 1 or outputFormat == 3:
         with open(SWGroupSuggestionsFieldNotices, 'w', encoding="utf-8", newline='') as target:
             CSV_Header = "customerId," \
@@ -4179,11 +4007,11 @@ def pxc_software_group_suggestions_field_notices():
             customerName = row['customerName']
             successTrackId = row['successTrackId']
             machineSuggestionId = row['machineSuggestionId']
-            headers = {'Authorization': f'Bearer {token}'}
+            headers = cdm.api_header()
             print(f"Software Group Suggestions Field Notices for {customerName} "
                   f"on Success Track {successTrackId}")
             if not successTrackId == "N/A":
-                pxc_refresh_token()
+                cdm.token_refresh()
                 url = (pxc_url_customers + "/" +
                        customerId +
                        pxc_url_software_group_suggestions_field_notices +
@@ -4191,7 +4019,7 @@ def pxc_software_group_suggestions_field_notices():
                        "&max=" + max_items +
                        "&machineSuggestionId=" + machineSuggestionId +
                        "&successTrackId=" + successTrackId)
-                response = pxc_api_request("GET", url, headers, payload)
+                response = cdm.api_request("GET", url, headers, data=payload)
                 if response and hasattr(response, 'text'):
                     reply = json.loads(response.text)
                 else:
@@ -4219,14 +4047,14 @@ def pxc_software_group_suggestions_field_notices():
                                "&machineSuggestionId=" + machineSuggestionId +
                                "&successTrackId=" + successTrackId)
                         items = (get_json_reply(url, tag="items"))
-                        print(f"\nFound Software Group Suggestions Field Notice for {customerName} "
+                        logging.info(f"\nFound Software Group Suggestions Field Notice for {customerName} "
                               f"with machine suggestion ID of {machineSuggestionId}")
                         if outputFormat == 1 or outputFormat == 2:
                             if items is not None:
                                 if len(items) > 0:
                                     page_name = "_SoftwareGroup_Suggestions_Field_Notices_" + machineSuggestionId
                                     with open(json_output_dir + customerId +
-                                              PageOfFileName(page_name, page, pages), 'w') as json_file:
+                                              cdm.pageofname(page_name, page, pages), 'w') as json_file:
                                         json.dump(items, json_file)
                                     print(f"Saving {json_file.name}")
                         if outputFormat == 1 or outputFormat == 3:
@@ -4260,10 +4088,10 @@ def pxc_software_group_suggestions_field_notices():
             except KeyError:
                 print("No Data to process... Skipping.")
                 pass
+
     print("\nSearch Completed!")
-    if debug_level == 1 or debug_level == 2:
-        now = datetime.now()
-        print('Stop DateTime:', now)
+    now = datetime.now()
+    logging.debug(f'Stop DateTime:{now}')
     print("====================\n")
 
 
@@ -4276,9 +4104,9 @@ def pxc_software_group_suggestions_advisories():
     print("**** Running Software Groups Suggestions Security Advisories *****")
     print("******************************************************************")
     print("Searching ......\n", end="")
-    if debug_level == 1 or debug_level == 2:
-        now = datetime.now()
-        print('Start DateTime:', now)
+    now = datetime.now()
+    logging.debug(f'Start DateTime:{now}')
+
     if outputFormat == 1 or outputFormat == 3:
         with open(SWGroupSuggestionsAdvisories, 'w', encoding="utf-8", newline='') as target:
             CSV_Header = "customerId," \
@@ -4296,12 +4124,12 @@ def pxc_software_group_suggestions_advisories():
     with open(SWGroupSuggestionSummaries, 'r') as target:
         csvreader = csv.DictReader(target)
         for row in csvreader:
-            pxc_refresh_token()
+            cdm.token_refresh()
             customerId = row['customerId']
             customerName = row['customerName']
             successTrackId = row['successTrackId']
             machineSuggestionId = row['machineSuggestionId']
-            headers = {'Authorization': f'Bearer {token}'}
+            headers = cdm.api_header()
             print(f"Software Group Suggestions Security Advisories for {customerName}"
                   f" on Success Track {successTrackId}")
             url = (pxc_url_customers + "/" +
@@ -4311,7 +4139,7 @@ def pxc_software_group_suggestions_advisories():
                    "&max=" + max_items +
                    "&machineSuggestionId=" + machineSuggestionId +
                    "&successTrackId=" + successTrackId)
-            response = pxc_api_request("GET", url, headers, payload)
+            response = cdm.api_request("GET", url, headers, data=payload)
             if response and hasattr(response, 'text'):
                 reply = json.loads(response.text)
             else:
@@ -4339,14 +4167,14 @@ def pxc_software_group_suggestions_advisories():
                                "&machineSuggestionId=" + machineSuggestionId +
                                "&successTrackId=" + successTrackId)
                         items = (get_json_reply(url, tag="items"))
-                        print(f"\nFound Software Group Suggestions Security Advisory for {customerName} "
+                        logging.info(f"\nFound Software Group Suggestions Security Advisory for {customerName} "
                               f"with machine suggestion ID of {machineSuggestionId}")
                         if outputFormat == 1 or outputFormat == 2:
                             if items is not None:
                                 if len(items) > 0:
                                     page_name = "_Security_Advisories_" + machineSuggestionId
                                     with open(json_output_dir + customerId +
-                                              PageOfFileName(page_name, page, pages), 'w') as json_file:
+                                              cdm.pageofname(page_name, page, pages), 'w') as json_file:
                                         json.dump(items, json_file)
                                     print(f"Saving {json_file.name}")
                             else:
@@ -4384,10 +4212,10 @@ def pxc_software_group_suggestions_advisories():
             except KeyError:
                 print("No Data to process... Skipping.")
                 pass
+
     print("\nSearch Completed!")
-    if debug_level == 1 or debug_level == 2:
-        now = datetime.now()
-        print('Stop DateTime:', now)
+    now = datetime.now()
+    logging.debug(f'Stop DateTime:{now}')
     print("====================\n")
 
 
@@ -4400,9 +4228,9 @@ def pxc_automated_fault_management_faults():
     print("*********** Running Automated Fault Management Faults ************")
     print("******************************************************************")
     print("Searching ......\n", end="")
-    if debug_level == 1 or debug_level == 2:
-        now = datetime.now()
-        print('Start DateTime:', now)
+    now = datetime.now()
+    logging.debug(f'Start DateTime:{now}')
+
     if outputFormat == 1 or outputFormat == 3:
         with open(AFMFaults, 'w', encoding="utf-8", newline='') as target:
             CSV_Header = "customerId," \
@@ -4425,7 +4253,7 @@ def pxc_automated_fault_management_faults():
         custList = csv.DictReader(cust_target)
         for row in custList:
             if not row["successTrackId"] == "N/A":
-                pxc_refresh_token()
+                cdm.token_refresh()
                 customerId = row['customerId']
                 customerName = row['customerName']
                 successTrackId = row['successTrackId']
@@ -4481,10 +4309,10 @@ def pxc_automated_fault_management_faults():
                                         occurences + ',' +
                                         ignoredAssets)
                             writer.writerow(CSV_Data.split())
+
     print("\nSearch Completed!")
-    if debug_level == 1 or debug_level == 2:
-        now = datetime.now()
-        print('Stop DateTime:', now)
+    now = datetime.now()
+    logging.debug(f'Stop DateTime:{now}')
     print("====================\n")
 
 
@@ -4496,9 +4324,9 @@ def pxc_automated_fault_management_fault_summary():
     print("******* Running Automated Fault Management Faults Summary ********")
     print("******************************************************************")
     print("Searching ......\n", end="")
-    if debug_level == 1 or debug_level == 2:
-        now = datetime.now()
-        print('Start DateTime:', now)
+    now = datetime.now()
+    logging.debug(f'Start DateTime:{now}')
+
     if outputFormat == 1 or outputFormat == 3:
         with open(AFMFaultSummary, 'w', encoding="utf-8", newline='') as target:
             CSV_Header = "customerId," \
@@ -4519,7 +4347,7 @@ def pxc_automated_fault_management_fault_summary():
         custList = csv.DictReader(cust_target)
         for row in custList:
             if not row["successTrackId"] == "N/A":
-                pxc_refresh_token()
+                cdm.token_refresh()
                 customerId = row['customerId']
                 customerName = row['customerName']
                 successTrackId = row['successTrackId']
@@ -4575,10 +4403,10 @@ def pxc_automated_fault_management_fault_summary():
             else:
                 print("\nNo Data Found .... Skipping")
                 print("====================\n\n")
+
     print("\nSearch Completed!")
-    if debug_level == 1 or debug_level == 2:
-        now = datetime.now()
-        print('Stop DateTime:', now)
+    now = datetime.now()
+    logging.debug(f'Stop DateTime:{now}')
     print("====================\n")
 
 
@@ -4591,9 +4419,9 @@ def pxc_automated_fault_management_affected_assets():
     print("******* Running Automated Fault Management Affected Assets ******")
     print("******************************************************************")
     print("Searching ......\n", end="")
-    if debug_level == 1 or debug_level == 2:
-        now = datetime.now()
-        print('Start DateTime:', now)
+    now = datetime.now()
+    logging.debug(f'Start DateTime:{now}')
+
     if outputFormat == 1 or outputFormat == 3:
         with open(AFMFaultAffectedAssets, 'w', encoding="utf-8", newline='') as target:
             CSV_Header = "customerId," \
@@ -4614,7 +4442,7 @@ def pxc_automated_fault_management_affected_assets():
         custList = csv.DictReader(cust_target)
         for row in custList:
             if not row["successTrackId"] == "N/A":
-                pxc_refresh_token()
+                cdm.token_refresh()
                 customerId = row['customerId']
                 customerName = row['customerName']
                 successTrackId = row['successTrackId']
@@ -4675,10 +4503,10 @@ def pxc_automated_fault_management_affected_assets():
             else:
                 print("\nNo Data Found .... Skipping")
                 print("====================\n\n")
+
     print("\nSearch Completed!")
-    if debug_level == 1 or debug_level == 2:
-        now = datetime.now()
-        print('Stop DateTime:', now)
+    now = datetime.now()
+    logging.debug(f'Stop DateTime:{now}')
     print("====================\n")
 
 
@@ -4691,9 +4519,9 @@ def pxc_compliance_violations():
     print("************** Running Compliance Violations Report **************")
     print("******************************************************************")
     print("Searching ......", end="")
-    if debug_level == 1 or debug_level == 2:
-        now = datetime.now()
-        print('Start DateTime:', now)
+    now = datetime.now()
+    logging.debug(f'Start DateTime:{now}')
+
     if outputFormat == 1 or outputFormat == 3:
         with open(RCCComplianceViolations, 'w', encoding="utf-8", newline='') as target:
             CSV_Header = "customerId," \
@@ -4718,16 +4546,16 @@ def pxc_compliance_violations():
             customerId = row['customerId']
             customerName = row['customerName']
             successTrackId = row['successTrackId']
-            headers = {'Authorization': f'Bearer {token}'}
+            headers = cdm.api_header()
             if not successTrackId == "N/A":
-                pxc_refresh_token()
+                cdm.token_refresh()
                 url = (pxc_url_customers + "/" +
                        customerId +
                        pxc_url_compliance_violations +
                        "?successTrackId=" + successTrackId +
                        "&days=30" +
                        "&max=" + max_items)
-                response = pxc_api_request("GET", url, headers, payload)
+                response = cdm.api_request("GET", url, headers, data=payload)
                 if response and hasattr(response, 'text'):
                     reply = json.loads(response.text)
                 else:
@@ -4736,7 +4564,7 @@ def pxc_compliance_violations():
 
                 page = 1
                 try:
-                    print(f"\nFound Compliance Violations for {customerName} on Success Track {successTrackId}")
+                    logging.info(f"\nFound Compliance Violations for {customerName} on Success Track {successTrackId}")
                     if response.status_code == 403:
                         print("Customer admin has not provided access.")
                     if response.status_code == 200:
@@ -4763,7 +4591,7 @@ def pxc_compliance_violations():
                                     if len(items) > 0:
                                         page_name = "_Regulatory_Compliance_Violations_" + successTrackId
                                         with open(json_output_dir + customerId +
-                                                  PageOfFileName(page_name, page, pages), 'w') as json_file:
+                                                  cdm.pageofname(page_name, page, pages), 'w') as json_file:
                                             json.dump(items, json_file)
                                         print(f"Saving {json_file.name}")
                             if outputFormat == 1 or outputFormat == 3:
@@ -4809,10 +4637,10 @@ def pxc_compliance_violations():
                     print("No Data to process... Skipping.")
                     page -= 1
                     pass
+
     print("\nSearch Completed!")
-    if debug_level == 1 or debug_level == 2:
-        now = datetime.now()
-        print('Stop DateTime:', now)
+    now = datetime.now()
+    logging.debug(f'Stop DateTime:{now}')
     print("====================\n")
 
 
@@ -4826,9 +4654,9 @@ def pxc_assets_violating_compliance_rule():
     print("*********** Running Assets Violating Compliance Rules ************")
     print("******************************************************************")
     print("Searching ......", end="")
-    if debug_level == 1 or debug_level == 2:
-        now = datetime.now()
-        print('Start DateTime:', now)
+    now = datetime.now()
+    logging.debug(f'Start DateTime:{now}')
+
     if outputFormat == 1 or outputFormat == 3:
         with open(RCCAssetsViolatingComplianceRule, 'w', encoding="utf-8", newline='') as target:
             CSV_Header = "customerId," \
@@ -4855,7 +4683,7 @@ def pxc_assets_violating_compliance_rule():
         custList = csv.DictReader(cust_target)
         fileNum = 0
         for row in custList:
-            pxc_refresh_token()
+            cdm.token_refresh()
             fileNum += 1
             customerId = row['customerId']
             customerName = row['customerName']
@@ -4882,7 +4710,7 @@ def pxc_assets_violating_compliance_rule():
                     if len(items) > 0:
                         page_name = "_Assets_Violating_Compliance_Rule_" + successTrackId
                         with open(json_output_dir + customerId +
-                                  PageFileName(page_name, fileNum), 'w') as json_file:
+                                  cdm.pagename(page_name, fileNum), 'w') as json_file:
                             json.dump(items, json_file)
                         print(f"Saving {json_file.name}")
             if outputFormat == 1 or outputFormat == 3:
@@ -4940,10 +4768,10 @@ def pxc_assets_violating_compliance_rule():
                 except KeyError:
                     print("No Data to process... Skipping.")
                     pass
+
     print("\nSearch Completed!")
-    if debug_level == 1 or debug_level == 2:
-        now = datetime.now()
-        print('Stop DateTime:', now)
+    now = datetime.now()
+    logging.debug(f'Stop DateTime:{now}')
     print("====================\n")
 
 
@@ -4957,9 +4785,9 @@ def pxc_compliance_rule_details():
     print("************* Running Compliance Rule Detail Report **************")
     print("******************************************************************")
     print("Searching ......\n", end="")
-    if debug_level == 1 or debug_level == 2:
-        now = datetime.now()
-        print('Start DateTime:', now)
+    now = datetime.now()
+    logging.debug(f'Start DateTime:{now}')
+
     if outputFormat == 1 or outputFormat == 3:
         with open(RCCPolicyRuleDetails, 'w', encoding="utf-8", newline='') as target:
             CSV_Header = "customerId," \
@@ -4975,7 +4803,7 @@ def pxc_compliance_rule_details():
         custList = csv.DictReader(cust_target)
         fileNum = 0
         for row in custList:
-            pxc_refresh_token()
+            cdm.token_refresh()
             fileNum += 1
             customerId = row['customerId']
             customerName = row['customerName']
@@ -4997,10 +4825,8 @@ def pxc_compliance_rule_details():
                    "&successTrackId=" + successTrackId +
                    "&max=" + max_items)
             try:
-                headers = {
-                    'Authorization': f'Bearer {token}'
-                }
-                response = pxc_api_requests("GET", url, headers)
+                headers = cdm.api_header()
+                response = cdm.api_requests("GET", url, headers)
                 if response and hasattr(response, 'text'):
                     reply = json.loads(response.text)
                 else:
@@ -5022,7 +4848,7 @@ def pxc_compliance_rule_details():
                 if outputFormat == 1 or outputFormat == 2:
                     page_name = "_Policy_Rule_Details_" + successTrackId
                     with open(json_output_dir + customerId +
-                              PageFileName(page_name, fileNum), 'w') as json_file:
+                              cdm.pagename(page_name, fileNum), 'w') as json_file:
                         json.dump(items, json_file)
                         print(f"Saving {json_file.name}")
                 if outputFormat == 1 or outputFormat == 3:
@@ -5039,10 +4865,10 @@ def pxc_compliance_rule_details():
                                     ruleId + ',' +
                                     policyId)
                         writer.writerow(CSV_Data.split())
+
     print("\nSearch Completed!")
-    if debug_level == 1 or debug_level == 2:
-        now = datetime.now()
-        print('Stop DateTime:', now)
+    now = datetime.now()
+    logging.debug(f'Stop DateTime:{now}')
     print("====================\n")
 
 
@@ -5055,9 +4881,9 @@ def pxc_compliance_suggestions():
     print("***************** Running Compliance Suggestions *****************")
     print("******************************************************************")
     print("Searching ......\n", end="")
-    if debug_level == 1 or debug_level == 2:
-        now = datetime.now()
-        print('Start DateTime:', now)
+    now = datetime.now()
+    logging.debug(f'Start DateTime:{now}')
+
     if outputFormat == 1 or outputFormat == 3:
         with open(RCCComplianceSuggestions, 'w', encoding="utf-8", newline='') as target:
             CSV_Header = "customerId," \
@@ -5077,7 +4903,7 @@ def pxc_compliance_suggestions():
         custList = csv.DictReader(cust_target)
         fileNum = 0
         for row in custList:
-            pxc_refresh_token()
+            cdm.token_refresh()
             fileNum += 1
             customerId = row['customerId']
             customerName = row['customerName']
@@ -5087,7 +4913,7 @@ def pxc_compliance_suggestions():
             policyGroupId = row['policyGroupId']
             ruleId = row['ruleId']
             print(f"\nCompliance Suggestions for Customer :{customerName} on Success Track {successTrackId}")
-            headers = {'Authorization': f'Bearer {token}'}
+            headers = cdm.api_header()
             url = (pxc_url_customers + "/" +
                    customerId +
                    pxc_url_compliance_suggestions +
@@ -5100,7 +4926,7 @@ def pxc_compliance_suggestions():
             if fileNum == 1:
                 print(f"Found Compliance Suggestions on Success Track {successTrackId} "
                       f"for {customerName}")
-            response = pxc_api_request("GET", url, headers, payload)
+            response = cdm.api_request("GET", url, headers, data=payload)
             if response and hasattr(response, 'text'):
                 reply = json.loads(response.text)
             else:
@@ -5136,7 +4962,7 @@ def pxc_compliance_suggestions():
                                 if outputFormat == 1 or outputFormat == 2:
                                     file_name = "_Compliance_Suggestions_" + successTrackId
                                     with open(json_output_dir + customerId +
-                                              PageFileName(page_name, fileNum), 'w') as json_file:
+                                              cdm.pagename(page_name, fileNum), 'w') as json_file:
                                         json.dump(items, json_file)
                                     print(f"Saving {json_file.name}")
                                 if outputFormat == 1 or outputFormat == 3:
@@ -5170,10 +4996,10 @@ def pxc_compliance_suggestions():
             except KeyError:
                 print("No Data to process... Skipping.")
                 pass
+
     print("\nSearch Completed!")
-    if debug_level == 1 or debug_level == 2:
-        now = datetime.now()
-        print('Stop DateTime:', now)
+    now = datetime.now()
+    logging.debug(f'Stop DateTime:{now}')
     print("====================\n")
 
 
@@ -5186,9 +5012,9 @@ def pxc_assets_with_violations():
     print("***************** Running Assets with Violations *****************")
     print("******************************************************************")
     print("Searching ......\n", end="")
-    if debug_level == 1 or debug_level == 2:
-        now = datetime.now()
-        print('Start DateTime:', now)
+    now = datetime.now()
+    logging.debug(f'Start DateTime:{now}')
+
     if outputFormat == 1 or outputFormat == 3:
         with open(RCCAssetsWithViolations, 'w', encoding="utf-8", newline='') as target:
             CSV_Header = "customerId," \
@@ -5218,7 +5044,7 @@ def pxc_assets_with_violations():
         for row in custList:
             fileNum += 1
             if not row["successTrackId"] == "N/A":
-                pxc_refresh_token()
+                cdm.token_refresh()
                 customerName = row["customerName"]
                 customerId = row["customerId"]
                 successTrackId = row["successTrackId"]
@@ -5237,7 +5063,7 @@ def pxc_assets_with_violations():
                             page_name = "_Assets_with_Violations_" + successTrackId
                             with open(
                                     json_output_dir + customerId +
-                                    PageFileName(page_name, fileNum), 'w') as json_file:
+                                    cdm.pagename(page_name, fileNum), 'w') as json_file:
                                 json.dump(items, json_file)
                             print(f"Saving {json_file.name}")
                 if outputFormat == 1 or outputFormat == 3:
@@ -5287,10 +5113,10 @@ def pxc_assets_with_violations():
                                     writer.writerow(CSV_Data.split())
             else:
                 print("\nNo Data Found .... Skipping")
+
     print("\nSearch Completed!")
-    if debug_level == 1 or debug_level == 2:
-        now = datetime.now()
-        print('Stop DateTime:', now)
+    now = datetime.now()
+    logging.debug(f'Stop DateTime:{now}')
     print("====================\n")
 
 
@@ -5303,9 +5129,9 @@ def pxc_asset_violations():
     print("************** Running Assets Violations Report ******************")
     print("******************************************************************")
     print("Searching ......\n", end="")
-    if debug_level == 1 or debug_level == 2:
-        now = datetime.now()
-        print('Start DateTime:', now)
+    now = datetime.now()
+    logging.debug(f'Start DateTime:{now}')
+
     if outputFormat == 1 or outputFormat == 3:
         with open(RCCAssetViolations, 'w', encoding="utf-8", newline='') as target:
             CSV_Header = "customerId," \
@@ -5327,7 +5153,7 @@ def pxc_asset_violations():
         custList = csv.DictReader(cust_target)
         fileNum = 0
         for row in custList:
-            pxc_refresh_token()
+            cdm.token_refresh()
             fileNum += 1
             customerId = row['customerId']
             customerName = row['customerName']
@@ -5342,14 +5168,14 @@ def pxc_asset_violations():
                    "&successTrackId=" + successTrackId +
                    "&max=" + max_items)
             if fileNum == 1:
-                print(f"\nFound {customerName} on Success Track {successTrackId}")
+                logging.info(f"\nFound {customerName} on Success Track {successTrackId}")
             items = (get_json_reply(url, tag="items"))
             if outputFormat == 1 or outputFormat == 2:
                 if items is not None:
                     if len(items) > 0:
                         page_name = "_Asset_Violations_" + sourceSystemId
                         with open(json_output_dir + customerId + 
-                                  PageFileName(page_name, fileNum), 'w') as json_file:
+                                  cdm.pagename(page_name, fileNum), 'w') as json_file:
                             json.dump(items, json_file)
                         print(f"Saving {json_file.name}")
             try:
@@ -5390,10 +5216,10 @@ def pxc_asset_violations():
             except KeyError:
                 print("No Data to process... Skipping.")
                 pass
+
     print("\nSearch Completed!")
-    if debug_level == 1 or debug_level == 2:
-        now = datetime.now()
-        print('Stop DateTime:', now)
+    now = datetime.now()
+    logging.debug(f'Stop DateTime:{now}')
     print("====================\n")
 
 
@@ -5407,9 +5233,9 @@ def pxc_obtained():
     print("********* Running Regulatory Compliance Obtained Report **********")
     print("******************************************************************")
     print("Searching ......\n", end="")
-    if debug_level == 1 or debug_level == 2:
-        now = datetime.now()
-        print('Start DateTime:', now)
+    now = datetime.now()
+    logging.debug(f'Start DateTime:{now}')
+
     if outputFormat == 1 or outputFormat == 3:
         with open(RCCObtained, 'w', encoding="utf-8", newline='') as target:
             CSV_Header = "customerId," \
@@ -5429,17 +5255,15 @@ def pxc_obtained():
                 print("====================\n")
                 print(f"Obtained data for {customerName} on Success Track {successTrackId}")
             if not successTrackId == "N/A":
-                pxc_refresh_token()
+                cdm.token_refresh()
                 print(f"Found Customer {customerName} on Success Track {successTrackId}")
                 url = (pxc_url_customers + "/" +
                        customerId +
                        pxc_url_compliance_obtained +
                        "?successTrackId=" + successTrackId)
                 try:
-                    headers = {
-                        'Authorization': f'Bearer {token}'
-                    }
-                    response = pxc_api_requests("GET", url, headers)
+                    headers = cdm.api_header()
+                    response = cdm.api_requests("GET", url, headers)
                     if response and hasattr(response, 'text'):
                         reply = json.loads(response.text)
                     else:
@@ -5478,9 +5302,8 @@ def pxc_obtained():
                         print("Customer admin has not provided access....Skipping")
 
     print("\nSearch Completed!")
-    if debug_level == 1 or debug_level == 2:
-        now = datetime.now()
-        print('Stop DateTime:', now)
+    now = datetime.now()
+    logging.debug(f'Stop DateTime:{now}')
     print("====================\n")
 
 
@@ -5493,9 +5316,9 @@ def pxc_crash_risk_assets():
     print("******* Running Risk Mitigation Checks on Crash Risk Assets ******")
     print("******************************************************************")
     print("Searching ......\n", end="")
-    if debug_level == 1 or debug_level == 2:
-        now = datetime.now()
-        print('Start DateTime:', now)
+    now = datetime.now()
+    logging.debug(f'Start DateTime:{now}')
+
     if outputFormat == 1 or outputFormat == 3:
         with open(CrashRiskAssets, 'w', encoding="utf-8", newline='') as target:
             CSV_Header = "customerId," \
@@ -5522,8 +5345,8 @@ def pxc_crash_risk_assets():
             customerName = row['customerName']
             successTrackId = row['successTrackId']
             if not row["successTrackId"] == "N/A":
-                pxc_refresh_token()
-                print(f"\nFound {customerName} on Success Track{successTrackId}")
+                cdm.token_refresh()
+                logging.info(f"\nFound {customerName} on Success Track{successTrackId}")
                 url = (pxc_url_customers + "/" +
                        customerId +
                        pxc_url_crash_risk_assets +
@@ -5580,10 +5403,10 @@ def pxc_crash_risk_assets():
                                                     risk + ',' +
                                                     endDate)
                                         writer.writerow(CSV_Data.split())
+
     print("\nSearch Completed!")
-    if debug_level == 1 or debug_level == 2:
-        now = datetime.now()
-        print('Stop DateTime:', now)
+    now = datetime.now()
+    logging.debug(f'Stop DateTime:{now}')
     print("====================\n")
 
 
@@ -5596,9 +5419,9 @@ def pxc_crash_risk_factors():
     print("****** Running Risk Mitigation Checks on Crash Risk Factors ******")
     print("******************************************************************")
     print("Searching ......\n", end="")
-    if debug_level == 1 or debug_level == 2:
-        now = datetime.now()
-        print('Start DateTime:', now)
+    now = datetime.now()
+    logging.debug(f'Start DateTime:{now}')
+
     if outputFormat == 1 or outputFormat == 3:
         with open(CrashRiskFactors, 'w', encoding="utf-8", newline='') as target:
             CSV_Header = "customerId," \
@@ -5619,8 +5442,8 @@ def pxc_crash_risk_factors():
             assetId = row["assetId"].replace("/", "-")
             assetUniqueId = row["assetUniqueId"]
             if not row["successTrackId"] == "N/A":
-                print(f"\nFound {customerName} with Asset {assetId}")
-                pxc_refresh_token()
+                logging.info(f"\nFound {customerName} with Asset {assetId}")
+                cdm.token_refresh()
                 url = (pxc_url_customers + "/" +
                        customerId +
                        pxc_url_crash_risk_assets + "/" + assetUniqueId +
@@ -5660,10 +5483,10 @@ def pxc_crash_risk_factors():
                             print(f"Customer {customerName} has Crash Risk Factor: {factor}")
             else:
                 print("\nNo Data Found .... Skipping")
+
     print("\nSearch Completed!")
-    if debug_level == 1 or debug_level == 2:
-        now = datetime.now()
-        print('Stop DateTime:', now)
+    now = datetime.now()
+    logging.debug(f'Stop DateTime:{now}')
     print("====================\n")
 
 
@@ -5677,9 +5500,9 @@ def pxc_similar_assets():
     print("******** Running Risk Mitigation Checks on Similar Assets ********")
     print("******************************************************************")
     print("Searching ......\n\n", end="")
-    if debug_level == 1 or debug_level == 2:
-        now = datetime.now()
-        print('Start DateTime:', now)
+    now = datetime.now()
+    logging.debug(f'Start DateTime:{now}')
+
     if outputFormat == 1 or outputFormat == 3:
         with open(CrashRiskSimilarAssets, 'w', encoding="utf-8", newline='') as target:
             CSV_Header = "customerId," \
@@ -5708,7 +5531,7 @@ def pxc_similar_assets():
             assetId = row["assetId"]
             assetUniqueId = row["assetUniqueId"]
             if not row["successTrackId"] == "N/A":
-                pxc_refresh_token()
+                cdm.token_refresh()
                 for feature in features:
                     url = (pxc_url_customers + "/" +
                            customerId +
@@ -5764,10 +5587,10 @@ def pxc_similar_assets():
                                         writer.writerow(CSV_Data.split())
             else:
                 print(f"No data found for {feature}\n")
+
     print("\nSearch Completed!")
-    if debug_level == 1 or debug_level == 2:
-        now = datetime.now()
-        print('Stop DateTime:', now)
+    now = datetime.now()
+    logging.debug(f'Stop DateTime:{now}')
     print("====================\n")
 
 
@@ -5782,9 +5605,9 @@ def pxc_crash_in_last():
     print("*** Running Risk Mitigation Checks on Assets last Crashed date ***")
     print("******************************************************************")
     print("Searching ......\n", end="")
-    if debug_level == 1 or debug_level == 2:
-        now = datetime.now()
-        print('Start DateTime:', now)
+    now = datetime.now()
+    logging.debug(f'Start DateTime:{now}')
+
     if outputFormat == 1 or outputFormat == 3:
         with open(CrashRiskAssetsLastCrashed, 'w', encoding="utf-8", newline='') as target:
             CSV_Header = "customerId," \
@@ -5814,7 +5637,7 @@ def pxc_crash_in_last():
             serialNumber = row['serialNumber']
             for daysLastCrashed in timePeriods:
                 if not row["successTrackId"] == "N/A":
-                    pxc_refresh_token()
+                    cdm.token_refresh()
                     print(f"\nScanning Serial Number {serialNumber} with a last crashed date within {daysLastCrashed} "
                           f"days for {customerName} ")
                     url = (pxc_url_customers + "/" +
@@ -5873,10 +5696,10 @@ def pxc_crash_in_last():
                 else:
                     print("\nNo Data Found .... Skipping")
                     print("====================\n\n")
+
     print("\nSearch Completed!")
-    if debug_level == 1 or debug_level == 2:
-        now = datetime.now()
-        print('Stop DateTime:', now)
+    now = datetime.now()
+    logging.debug(f'Stop DateTime:{now}')
     print("====================\n")
 
 
@@ -5890,9 +5713,9 @@ def pxc_asset_crash_history():
     print("***** Running Risk Mitigation Checks on Assets Crash History *****")
     print("******************************************************************")
     print("Searching ......\n", end="")
-    if debug_level == 1 or debug_level == 2:
-        now = datetime.now()
-        print('Start DateTime:', now)
+    now = datetime.now()
+    logging.debug(f'Start DateTime:{now}')
+
     if outputFormat == 1 or outputFormat == 3:
         with open(CrashRiskAssetCrashHistory, 'w', encoding="utf-8", newline='') as target:
             CSV_Header = "customerId," \
@@ -5912,7 +5735,7 @@ def pxc_asset_crash_history():
             assetUniqueId = row["assetUniqueId"]
             assetId = row["assetId"]
             if not row["successTrackId"] == "N/A":
-                pxc_refresh_token()
+                cdm.token_refresh()
                 print(f"\nScanning Asset ID:{assetId} for {customerName} on Success Track{successTrackId}")
                 url = (pxc_url_customers + "/" +
                        customerId +
@@ -5950,10 +5773,10 @@ def pxc_asset_crash_history():
             else:
                 print("\nNo Data Found .... Skipping")
                 print("====================\n\n")
+
     print("\nSearch Completed!")
-    if debug_level == 1 or debug_level == 2:
-        now = datetime.now()
-        print('Stop DateTime:', now)
+    now = datetime.now()
+    logging.debug(f'Stop DateTime:{now}')
     print("====================\n")
 
 '''
@@ -5969,24 +5792,9 @@ if __name__ == '__main__':
     # Parse command-line arguments
     args = parser.parse_args()
 
+    # setup the logging level
+    logger = init_logger(args.log_level.upper())
 
-    # Check if the specified log level is valid
-    #   CRITICAL: Indicates a very serious error, typically leading to program termination.
-    #   ERROR:    Indicates an error that caused the program to fail to perform a specific function.
-    #   WARNING:  Indicates a warning that something unexpected happened
-    #   INFO:     Provides confirmation that things are working as expected
-    #   DEBUG:    Provides info useful for diagnosing problems
-    log_level = args.log_level.upper()
-    if log_level not in ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"):
-        print("Invalid log level. Please use one of: DEBUG, INFO, WARNING, ERROR, CRITICAL")
-        exit(1)
-
-    # Set up logging based on the parsed log level
-    logging.basicConfig(format='%(levelname)s:%(funcName)s: %(message)s', level=log_level)
-
-    # Your application code
-    logger = logging.getLogger(__name__)
-    
     # call function to load config.ini data into variables
     customer = args.customer
     load_config(customer)
@@ -6000,12 +5808,6 @@ if __name__ == '__main__':
 
     # clear log folder before the script runs if logging is enabled
     if log_to_file == 1:
-        if outputFormat == 1:
-            print("Saving data in JSON and CSV formats")
-        if outputFormat == 2:
-            print("Saving data in JSON format")
-        if outputFormat == 3:
-            print("Saving data in CSV format")
         if os.path.isdir(log_output_dir):
             shutil.rmtree(log_output_dir)
             os.mkdir(log_output_dir)
@@ -6014,20 +5816,21 @@ if __name__ == '__main__':
 
     # Set URL to Sandbox if useProductionURL is false
     if useProductionURL == 0:
-        pxc_url_base = urlProtocol + urlHost + urlLinkSandbox
-        pxc_scope = "api.customer.assets.manage"
+        urlBase = urlProtocol + urlHost + urlLinkSandbox
+        cdm.authScope = "api.customer.assets.manage"
         environment = "Sandbox"
     elif useProductionURL == 1:
-        pxc_url_base = urlProtocol + urlHost + urlLink
-        pxc_scope = "api.authz.iam.manage"
+        urlBase = urlProtocol + urlHost + urlLink
+        cdm.authScope = "api.authz.iam.manage"
         environment = "Production"
-    pxc_url_customers = pxc_url_base + "customers"
-    pxc_url_contracts = pxc_url_base + "contracts"
-    pxc_url_contractswithcustomers = pxc_url_base + "contractsWithCustomers"
-    pxc_url_contracts_details = pxc_url_base + "contract/details"
-    pxc_url_partner_offers = pxc_url_base + "partnerOffers"
-    pxc_url_partner_offers_sessions = pxc_url_base + "partnerOffersSessions"
-    pxc_url_successTracks = pxc_url_base + "successTracks"
+
+    pxc_url_customers = urlBase + "customers"
+    pxc_url_contracts = urlBase + "contracts"
+    pxc_url_contractswithcustomers = urlBase + "contractsWithCustomers"
+    pxc_url_contracts_details = urlBase + "contract/details"
+    pxc_url_partner_offers = urlBase + "partnerOffers"
+    pxc_url_partner_offers_sessions = urlBase + "partnerOffersSessions"
+    pxc_url_successTracks = urlBase + "successTracks"
 
     # Set number of itterations for testing, time stamp, logging level and if the log should be written to file
     for x in range(0, testLoop):
@@ -6048,10 +5851,12 @@ if __name__ == '__main__':
               "\nEnvironment is", environment)
 
         # delete temp and output directories and recreate before every run
-        pxc_storage(None)
+        json_dir = json_output_dir if outputFormat == 1 or outputFormat == 2 else None
+        csv_dir = csv_output_dir if outputFormat == 1 or outputFormat == 3 else None
+        cdm.storage(csv_dir, json_dir, temp_dir)
 
         # call the function to get a valid PX Cloud API token
-        pxc_get_token()
+        cdm.token()
 
         # call the function to get the PX Cloud Customer List
         pxc_get_customers()
