@@ -5851,7 +5851,8 @@ if __name__ == '__main__':
         elif debug_level == 2:
             logLevel = "High"
 
-        init_debug_file(x):
+        #setup file logging
+        init_debug_file(x)
 
         startTime = time.time()
         print('Start Time:', datetime.now())
