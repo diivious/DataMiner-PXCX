@@ -194,6 +194,7 @@ from cdm import clientId
 from cdm import clientSecret
 from cdm import cacheControl
 from cdm import authScope
+from cdm import urlTimeout
 
 """
 Notes on Imports
@@ -212,10 +213,12 @@ argparse for command line arguement parsing
 cdm for common Cisco DataMiner functions
 """
 
+# Cisco DataMiner Module Variables
+# =======================================================================
+cdm.tokenUrl = "https://id.cisco.com/oauth2/aus1o4emxorc3wkEe5d7/v1/token"
+
 # PXCloud settings
 # =======================================================================
-# Cisco DataMiner Module Variables
-cdm.tokenUrl = "https://id.cisco.com/oauth2/aus1o4emxorc3wkEe5d7/v1/token"
 
 # Generic URL Variables
 urlBase = ""
@@ -223,6 +226,7 @@ urlProtocol = "https://"
 urlHost = "api-cx.cisco.com/"
 urlLink = "px/v1/"
 urlLinkSandbox = "sandbox/px/v1/"
+urlTimeout = 10
 environment = ""
 
 # Customer and Analytics Insights URL Variables
@@ -342,44 +346,15 @@ def init_logger(log_level):
 
     # Create a StreamHandler with flush set to True
     handler = logging.StreamHandler()
-    handler.flush = True
     logger.addHandler(handler)
 
     return logger
 
-#
-def location_ready_status(location, headers):
-    tries = 0
-    while True:
-        print('Checking report ready status')
-        response = cdm.api_request("GET", location, headers, allow_redirects=False)
-        if response:
-            if response.status_code == 302 or response.status_code == 303:
-                # Handle the redirection as needed
-                # You might want to update the 'location' variable with the new URL
-                location = response.headers['Location']
-                break
-            else:
-                print(f'API Requested {nextPoll} minute(s) for report to complete...')
-                nextPoll = int(response.json().get('suggestedNextPollTimeInMins', 1))
-                time.sleep(nextPoll * 10)
-        else:
-            # failed to get a valid respone from Cisco.  Try 3 more times max
-            tries += 1
-            if tries > 3:
-                logging.critical("Failed to get a valid response after 3 attempts.")
-                location = None
-                break
-        # end if
-    # end while
-    print('Downloading Report...')
-    return location
-
-def proccess_sandbox_files(filename, customerid, reportid, json_filename):
-    with zipfile.ZipFile(filename, mode="r") as archive:
-        for jsonfile in archive.namelist():
-            print(f'Correcting Sandbox file name')
-            os.rename((temp_dir + jsonfile), (temp_dir + customerid + reportid + json_filename))
+def init_debug_file(count):
+    if log_to_file == 1:
+        print(f"Logging output to file PXCloud_##.log for version {codeVersion}")
+        sys.stdout = open(log_output_dir + 'PXCloud_' + str(count) + '.log', 'wt')
+    #end if
 
 # Function explain usage
 def usage():
@@ -439,6 +414,7 @@ def load_config(customer):
         testLoop = int((config['settings']["testLoop"]))
         outputFormat = int((config['settings']["outputFormat"]))
         useProductionURL = int(config['settings']["useProductionURL"])
+        cdm.urlTimeout = int((config['settings']['urlTimeout']))
 
     else:
         print('Config.ini not found!!!!!!!!!!!!\nCreating config.ini...')
@@ -474,6 +450,9 @@ def load_config(customer):
         config.set("settings", "outputFormat", "1")
         config.set("settings", "# use production url (1=true 0=false) if false, use sandbox url, default", "1")
         config.set("settings", "useProductionURL", "1")
+        config.set('settings', '# Set how many second to wait for the API to respond default', '10')
+        config.set('settings', 'urlTimeout', '10')
+
         with open(configFile, 'w') as configfile:
             config.write(configfile)
         sys.exit()
@@ -510,6 +489,39 @@ def s3_storage():
         print("\nUploading data to S3 was SKIPPED")
         print("====================\n\n")
 
+def proccess_sandbox_files(filename, customerid, reportid, json_filename):
+    with zipfile.ZipFile(filename, mode="r") as archive:
+        for jsonfile in archive.namelist():
+            print(f'Correcting Sandbox file name')
+            os.rename((temp_dir + jsonfile), (temp_dir + customerid + reportid + json_filename))
+
+#
+def location_ready_status(location, headers):
+    tries = 0
+    while True:
+        print('Checking report ready status')
+        response = cdm.api_request("GET", location, headers, allow_redirects=False)
+        if response:
+            if response.status_code == 302 or response.status_code == 303:
+                # Handle the redirection as needed
+                # You might want to update the 'location' variable with the new URL
+                location = response.headers['Location']
+                break
+            else:
+                print(f'API Requested {nextPoll} minute(s) for report to complete...')
+                nextPoll = int(response.json().get('suggestedNextPollTimeInMins', 1))
+                time.sleep(nextPoll * 10)
+        else:
+            # failed to get a valid respone from Cisco.  Try 3 more times max
+            tries += 1
+            if tries > 3:
+                logging.critical("Failed to get a valid response after 3 attempts.")
+                location = None
+                break
+        # end if
+    # end while
+    print('Downloading Report...')
+    return location
 
 # Function to get the raw API JSON data from PX Cloud
 def get_json_reply(url, tag):
@@ -518,7 +530,6 @@ def get_json_reply(url, tag):
 
     while tries < 3:
         try:
-            cdm.token_refresh()
             headers = cdm.api_header()
             response = cdm.api_request("GET", url, headers, data=payload)
             if response and response.status_code == 200:
@@ -549,6 +560,8 @@ def get_json_reply(url, tag):
 
         finally:
             tries += 1
+            cdm.token_refresh()
+            time.sleep(wait_time * tries)  # increase the wait with the number of retries
 
     # end while
     logging.critical("Failed to get JSON reply... Skipping")
@@ -5806,13 +5819,10 @@ if __name__ == '__main__':
         # Change into the directory
         os.chdir(customer)
 
-    # clear log folder before the script runs if logging is enabled
-    if log_to_file == 1:
-        if os.path.isdir(log_output_dir):
-            shutil.rmtree(log_output_dir)
-            os.mkdir(log_output_dir)
-        else:
-            os.mkdir(log_output_dir)
+    # delete temp and output directories and recreate before every run
+    json_dir = json_output_dir if outputFormat == 1 or outputFormat == 2 else None
+    csv_dir = csv_output_dir if outputFormat == 1 or outputFormat == 3 else None
+    cdm.storage(csv_dir, json_dir, temp_dir)
 
     # Set URL to Sandbox if useProductionURL is false
     if useProductionURL == 0:
@@ -5841,19 +5851,12 @@ if __name__ == '__main__':
         elif debug_level == 2:
             logLevel = "High"
 
-        if log_to_file == 1:
-            print(f"Logging output to file PXCloud_##.log with debug level set to {logLevel} for version {codeVersion}")
-            sys.stdout = open(log_output_dir + 'PXCLoud_' + str(x + 1) + '.log', 'wt')
+        init_debug_file(x):
 
         startTime = time.time()
         print('Start Time:', datetime.now())
         print("Execution:", x + 1, "of", testLoop, "\nDebug level is:", logLevel, "\nVersion is", codeVersion,
               "\nEnvironment is", environment)
-
-        # delete temp and output directories and recreate before every run
-        json_dir = json_output_dir if outputFormat == 1 or outputFormat == 2 else None
-        csv_dir = csv_output_dir if outputFormat == 1 or outputFormat == 3 else None
-        cdm.storage(csv_dir, json_dir, temp_dir)
 
         # call the function to get a valid PX Cloud API token
         cdm.token()
