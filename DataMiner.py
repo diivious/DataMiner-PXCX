@@ -529,12 +529,19 @@ def get_json_reply(url, tag):
     response = []
 
     while tries < 3:
+        headers = cdm.api_header()
         try:
-            headers = cdm.api_header()
             response = cdm.api_request("GET", url, headers, data=payload)
             if response and response.status_code == 200:
                 reply = json.loads(response.text)
                 items = reply.get(tag, [])
+                if debug_level == 2:
+                    print("URL Request:", url,
+                          "\nURL Tag:", tag,
+                          "\nHTTP Code:", response.status_code,
+                          "\nReview API Headers:", response.headers,
+                          "\nResponse Body:", response.content)
+
                 if items:
                     logging.debug("\nSuccess! \nContinuing.")
                     return items
@@ -928,9 +935,9 @@ def pxc_get_contracts_details():
                                "&max=" + max_items
                                )
                         items = (get_json_reply(url, tag="items"))
-                        if outputFormat == 1 or outputFormat == 2:
-                            if items is not None:
-                                if len(items) > 0:
+                        if items is not None:
+                            if len(items) > 0:
+                                if outputFormat == 1 or outputFormat == 2:
                                     page_name = "_Contract_Details_" + contractNumber
                                     json_file = (json_output_dir + cdm.filename(customerName) +
                                                  cdm.pageofname(page_name, page, pages))
@@ -940,14 +947,12 @@ def pxc_get_contracts_details():
                                             print(f"Saving {json_file}")
                                     else:
                                         print("Duplcates found and being ignored...")
-                        if outputFormat == 1 or outputFormat == 3:
-                            if items is not None:
-                                if len(items) > 0:
+                                if outputFormat == 1 or outputFormat == 3:
                                     for item in items:
                                         customerGUName = str(item['customerGUName'].replace(",", " "))
                                         customerHQName = str(item['customerHQName'].replace(",", " "))
                                         productId = str(item['productId'].replace(",", " "))
-                                        serialNumber = str(item['serialNumber'])
+                                        serialNumber = str(item.get('serialNumber', '')) # handle case where KEY is missing
                                         contractStatus = str(item['contractStatus'])
                                         componentType = str(item['componentType'].replace(",", " "))
                                         serviceLevel = str(item['serviceLevel'].replace(",", " "))
@@ -975,11 +980,13 @@ def pxc_get_contracts_details():
                                                         installationQuantity + ',' +
                                                         instanceNumber)
                                             writer.writerow(CSV_Data.split())
+                            else:
+                                print("Items length is 0 when trying to save data...")
                         else:
-                            print("\nNo Contract List Data Found .... Skipping")
+                            print("\nItem None: No Data Found .... Skipping")
                         page += 1
-            except KeyError:
-                print("No Contract Data to process... Skipping.")
+            except KeyError as e:
+                print(f"KeyError: {e} ... Skipping.")
                 pass
 
     print("\nSearch Completed!")
