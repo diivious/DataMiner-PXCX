@@ -529,7 +529,11 @@ def get_json_reply(url, tag):
     response = []
     headers = cdm.api_header()
 
-    while tries < 3:
+    now = datetime.now()
+    logging.info(f"Start DateTime: {now}")
+
+    while True:
+        time.sleep(0.1)
         cdm.token_refresh()
 
         try:
@@ -546,7 +550,7 @@ def get_json_reply(url, tag):
 
                 if items:
                     if tries >= 2:
-                        logging.debug("\nSuccess on retry! \nContinuing.")
+                        logging.debug("\nSuccess on retry {tries}! \nContinuing.")
                     else:
                         logging.debug("\nSuccess! \nContinuing.")
                     return items
@@ -554,29 +558,28 @@ def get_json_reply(url, tag):
             else:
                 logging.error("\nEmpty response received. Retrying...\n")
             
-        except Exception as Error:
-            logging.error(f"An error occurred: {e}\nRetrying...")
+        except Exception as e:
+            logging.error(f"An error occurred: {e} \nTry {tries}...")
 
             if response:
                 if response.text.__contains__("Customer admin has not provided access."):
-                    logging.info("\nResponse Body:", response.content)
-                    if tag == "items":
-                        logging.critical("Customer admin has not provided access....")
+                    logging.critical("Customer admin has not provided access....")
+                    logging.debug("\nResponse Body:", response.content)
                     break
 
                 elif response.text.__contains__("Not found"):
+                    logging.warning("Error Not Found....Skipping")
                     logging.warning("\nResponse Body:", response.content)
-                    if tag == "items":
-                        logging.warning("No Data Found....Skipping")
                     break
 
         finally:
-            logging.debug("Retrying request.")
+            if tries > 1:
+                logging.debug(f"Get Reply - retry {tries}.")
             tries += 1
             time.sleep(wait_time * tries)  # increase the wait with the number of retries
 
     # end while
-    logging.critical("Failed to get JSON reply... Skipping")
+    logging.critical(f"Failed to get JSON reply after {tries} tries!")
     return []
 
 
@@ -598,7 +601,7 @@ def pxc_get_customers():
         sys.exit()
 
     pages = math.ceil(totalCount / int(max_items))
-    print("{totalCount} Found - Pages: {pages}\n", end="")
+    print(f"Found {totalCount} items - Pages: {pages}\n", end="")
 
     page = 0
     with open(customers, 'w', encoding="utf-8", newline='') as target:
