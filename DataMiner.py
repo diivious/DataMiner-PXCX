@@ -1,4 +1,3 @@
-
 """
 
                            CISCO SAMPLE CODE LICENSE
