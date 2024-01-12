@@ -527,9 +527,11 @@ def location_ready_status(location, headers):
 def get_json_reply(url, tag):
     tries = 1
     response = []
+    headers = cdm.api_header()
 
     while tries < 3:
-        headers = cdm.api_header()
+        cdm.token_refresh()
+
         try:
             response = cdm.api_request("GET", url, headers, data=payload)
             if response and response.status_code == 200:
@@ -543,7 +545,10 @@ def get_json_reply(url, tag):
                           "\nResponse Body:", response.content)
 
                 if items:
-                    logging.debug("\nSuccess! \nContinuing.")
+                    if tries >= 2:
+                        logging.debug("\nSuccess on retry! \nContinuing.")
+                    else:
+                        logging.debug("\nSuccess! \nContinuing.")
                     return items
 
             else:
@@ -566,8 +571,8 @@ def get_json_reply(url, tag):
                     break
 
         finally:
+            logging.debug("Retrying request.")
             tries += 1
-            cdm.token_refresh()
             time.sleep(wait_time * tries)  # increase the wait with the number of retries
 
     # end while
@@ -583,16 +588,18 @@ def pxc_get_customers():
     print("******************************************************************")
     print("****************** Running Customer Report ***********************")
     print("******************************************************************")
-    print("Searching ......\n", end="")
+    print("Searching ......", end="")
     now = datetime.now()
     logging.debug(f'Start DateTime:{now}')
 
-    totalCount = (get_json_reply(url=(pxc_url_customers + "?max=" + max_items), tag="totalCount"))
+    totalCount = get_json_reply(url=(pxc_url_customers + "?max=" + max_items), tag="totalCount")
     if not totalCount:
         logging.critical("No Customers found...., exiting....")
         sys.exit()
 
     pages = math.ceil(totalCount / int(max_items))
+    print("{totalCount} Found - Pages: {pages}\n", end="")
+
     page = 0
     with open(customers, 'w', encoding="utf-8", newline='') as target:
         CSV_Header = "customerId,customerName,successTrackId,successTrackAccess"
@@ -611,9 +618,11 @@ def pxc_get_customers():
             customerNameTemp = str(item['customerName'].replace('"', ','))
             customerName = customerNameTemp.replace(',', ' ')
             successTrack = item['successTracks']
+
             print(f"Found Customer {customerName}")
             if not successTrack:
                 successTrack = [{'id': 'N/A', 'access': 'N/A'}]
+
             for track in successTrack:
                 successTrackId = str(track['id'])
                 trackAccess = str(track['access'])
@@ -679,21 +688,9 @@ def pxc_get_contracts():
             page += 1
             for item in items:
                 contractNumber = str(item['contractNumber'])
-                try:
-                    cuid = str(item['cuid'])
-                except KeyError:
-                    cuid = "N/A"
-                    pass
-                try:
-                    cavid = str(item['cavid'])
-                except KeyError:
-                    cavid = "N/A"
-                    pass
-                try:
-                    customerNameTemp = str(item['customerName'].replace('"', ','))
-                except KeyError:
-                    customerNameTemp = "N/A"
-                    pass
+                cuid = str(item.get('cuid', 'N/A'))
+                cavid = str(item.get('cavid', 'N/A'))
+                customerNameTemp = str(item.get('customerName', 'N/A').replace('"', ','))
                 contractStatus = str(item['contractStatus'])
                 contractValue = str(item['contractValue'])
                 customerName = customerNameTemp.replace(',', ' ')
@@ -804,25 +801,14 @@ def pxc_get_contractswithcustomers():
                 customerId = str(customerDetails[0]['customerId'])
                 contractNumber = str(item['contractNumber'])
                 contractStatus = str(item['contractStatus'])
-                try:
-                    contractValue = str(item['contractValue'])
-                except KeyError:
-                    contractValue = ""
-                try:
-                    customerGUName = str(customerDetails[0]['customerGUName'].replace('?', ' '))
-                except KeyError:
-                    customerGUName = customerName
-                serviceLevel = str(item['serviceLevel'].replace(",", "|"))
-                coverageStartDate = str(item['coverageStartDate'])
-                coverageEndDate = str(item['coverageEndDate'])
-                try:
-                    onboardedstatus = str(item['onboardedStatus'])
-                except KeyError:
-                    onboardedstatus = str(item['onboardedstatus'])
-                try:
-                    successTrackIds = (item['successTrackIds'])
-                except KeyError:
-                    successTrackIds = ""
+                contractValue = str(item.get('contractValue', ''))
+                customerGUName = str(customerDetails[0].get('customerGUName', '').replace('?', ' ')) if customerDetails else customerName
+                serviceLevel = str(item.get('serviceLevel', '').replace(",", "|"))
+                coverageStartDate = str(item.get('coverageStartDate', ''))
+                coverageEndDate = str(item.get('coverageEndDate', ''))
+                onboardedstatus = str(item.get('onboardedStatus', item.get('onboardedstatus', '')))
+                successTrackIds = str(item.get('successTrackIds', ''))
+
                 for successTrackId in successTrackIds:
                     logging.info(f"Found Contract Number {contractNumber} for {customerGUName}")
                     CSV_Data = (customerName + ',' +
@@ -888,16 +874,13 @@ def pxc_get_contracts_details():
             customerName = "None"
             contractNumber = "None"
 
-            try:
-                customerName = row["customerName"].replace(",", " ")
-            except KeyError:
-                print("No customerName for Row:", row) 
-                pass
+            customerName = row.get("customerName", "").replace(",", " ")
+            if not customerName:
+                print("No customerName for Row:", row)
 
-            try:
-                contractNumber = row["contractNumber"]
-            except KeyError:
-                print("No contractNumber for Row:", row) 
+            contractNumber = row.get("contractNumber")
+            if contractNumber is None:
+                print("No contractNumber for Row:", row)
                 continue
 
             headers = cdm.api_header()
@@ -1054,11 +1037,7 @@ def pxc_get_partner_offers():
                     description = str(item['description']).replace(",", " ")
                     duration = str(item['duration'])
                     accTimeRequiredHours = str(item['accTimeRequiredHours'])
-                    try:
-                        imageFileName = str(item['imageFileName']).replace(",", " ")
-                    except KeyError:
-                        imageFileName = "None"
-                        pass
+                    imageFileName = str(item.get('imageFileName', 'None')).replace(",", " ")
                     customerRating = str(item['customerRating'])
                     status = str(item['status']).replace(",", " ")
                     userFirstName = str(item['userFirstName']).replace(",", " ")
@@ -1089,11 +1068,8 @@ def pxc_get_partner_offers():
                             for row in checklists:
                                 mappingChecklistId = str(row['mappingChecklistId'])
                                 checklistId = str(row['checklistId'])
-                                try:
-                                    checklist = str(row['checklist'])
-                                except KeyError:
-                                    checklist = "N/A"
-                                    pass
+                                checklist = str(row.get('checklist', 'N/A'))
+
                                 with open(partnerOffers, 'a', encoding="utf-8", newline='') as target:
                                     writer = csv.writer(target,
                                                         delimiter=' ',
@@ -1192,21 +1168,9 @@ def pxc_get_partner_offer_sessions():
                         timezone = session['timezone'].replace(",", " ")
                         status = session['status'].replace(",", " ")
                         noOfAttendees = str(session['noOfAttendees'])
-                        try:
-                            preferredSlot = session['preferredSlot'].replace(",", " ")
-                        except KeyError:
-                            preferredSlot = "N/A"
-                            pass
-                        try:
-                            businessOutcome = session['businessOutcome'].replace(",", " ")
-                        except KeyError:
-                            businessOutcome = "N/A"
-                            pass
-                        try:
-                            reasonForInterest = session['reasonForInterest'].replace(",", " ")
-                        except KeyError:
-                            reasonForInterest = "N/A"
-                            pass
+                        preferredSlot = str(session.get('preferredSlot', 'N/A')).replace(",", " ")
+                        businessOutcome = str(session.get('businessOutcome', 'N/A')).replace(",", " ")
+                        reasonForInterest = str(session.get('reasonForInterest', 'N/A')).replace(",", " ")
                         createdDate = str(session['createdDate'])
                         modifiedDate = str(session['modifiedDate'])
                         attendeeList = session['attendeeList']
@@ -1219,11 +1183,7 @@ def pxc_get_partner_offer_sessions():
                                              'companyName': 'N/A'}]
                         for attendee in attendeeList:
                             attendeeId = attendee['attendeeId'].replace(",", " ")
-                            try:
-                                ccoId = attendee['ccoId'].replace(",", " ")
-                            except KeyError:
-                                ccoId = "N/A"
-                                pass
+                            ccoId = str(attendee.get('ccoId', 'N/A')).replace(",", " ")
                             attendeeUserEmail = attendee['attendeeUserEmail'].replace(",", " ")
                             attendeeUserFullName = attendee['attendeeUserFullName'].replace(",", " ")
                             customerId = attendee['customerId'].replace(",", " ")
@@ -1420,7 +1380,7 @@ def pxc_assets_reports():
                             pass
                         else:
                             raise KeyError
-                    except KeyError:
+                    except KeyError as e:
                         print("\n!!!!!!!!\nException Thrown for", "Customer:",
                               customerId, "on Success Track", successTrackId,
                               "Report Failed to Download\n")
@@ -1507,20 +1467,12 @@ def pxc_assets_reports():
                                         productDescription = str(item['productDescription']).replace(",", " ")
                                         softwareType = str(item['softwareType']).replace(",", " ")
                                         softwareRelease = str(item['softwareRelease'])
-                                        try:
-                                            role = str((item['role']))
-                                        except KeyError:
-                                            role = "N/A"
-                                            pass
+                                        role = str(item.get('role', 'N/A'))
                                         assetLocation = str(item['location']).replace(",", " ")
                                         coverageStatus = str(item['coverageStatus'])
-                                        try:
-                                            lastScan = str(item['lastScan'])
-                                            if lastScan == "None":
-                                                lastScan = ""
-                                        except KeyError:
+                                        lastScan = str(item.get('lastScan', ''))
+                                        if lastScan == "None":
                                             lastScan = ""
-                                            pass
                                         successTrack = item['successTrack']
                                         endOfLifeAnnounced = str(item['endOfLifeAnnounced'])
                                         if endOfLifeAnnounced == "None":
@@ -1544,11 +1496,7 @@ def pxc_assets_reports():
                                         if ldosDate == "None":
                                             ldosDate = ""
                                         connectionStatus = str(item['connectionStatus'])
-                                        try:
-                                            managedBy = str(item['managedBy'])
-                                        except KeyError:
-                                            managedBy = "N/A"
-                                            pass
+                                        managedBy = str(item.get('managedBy', 'N/A'))
                                         contractNumber = str(item['contractNumber'])
                                         coverageEndDate = str(item['coverageEndDate'])
                                         if coverageEndDate == "None":
@@ -1559,75 +1507,27 @@ def pxc_assets_reports():
                                         supportType = str(item['supportType'])
                                         advisories = str(item['advisories'])
                                         assetType = str(item['assetType'])
-                                        try:
-                                            criticalSecurityAdvisories = str(item['criticalSecurityAdvisories'])
-                                        except KeyError:
-                                            criticalSecurityAdvisories = ""
-                                            pass
-                                        try:
-                                            addressLine1 = str(item['addressLine1']).replace(",", " ")
-                                        except KeyError:
-                                            addressLine1 = ""
-                                            pass
-                                        try:
-                                            addressLine2 = str(item['addressLine2']).replace(",", " ")
-                                        except KeyError:
-                                            addressLine2 = ""
-                                            pass
-                                        try:
-                                            addressLine3 = str(item['addressLine3']).replace(",", " ")
-                                        except KeyError:
-                                            addressLine3 = ""
-                                            pass
-                                        try:
-                                            licenseStatus = str(item['licenseStatus'])
-                                        except KeyError:
-                                            licenseStatus = ""
-                                            pass
-                                        try:
-                                            licenseLevel = str(item['licenseLevel'])
-                                        except KeyError:
-                                            licenseLevel = ""
-                                            pass
-                                        try:
-                                            profileName = str(item['profileName']).replace(",", " ")
-                                        except KeyError:
-                                            profileName = ""
-                                            pass
-                                        try:
-                                            hclStatus = str(item['hclStatus'])
-                                        except KeyError:
-                                            hclStatus = ""
-                                            pass
-                                        try:
-                                            ucsDomain = str(item['ucsDomain'])
-                                        except KeyError:
-                                            ucsDomain = ""
-                                            pass
-                                        try:
-                                            hxCluster = str(item['hxCluster'])
-                                        except KeyError:
-                                            hxCluster = ""
-                                            pass
-                                        try:
-                                            subscriptionId = str(item['subscriptionId'])
-                                        except KeyError:
-                                            subscriptionId = ""
-                                            pass
-                                        try:
-                                            subscriptionStartDate = str(item['subscriptionStartDate'])
-                                            if subscriptionStartDate == "None":
-                                                subscriptionStartDate = ""
-                                        except KeyError:
+
+                                        # Handle option keys
+                                        criticalSecurityAdvisories = str(item.get('criticalSecurityAdvisories', ''))
+                                        addressLine1 = str(item.get('addressLine1', '')).replace(",", " ")
+                                        addressLine2 = str(item.get('addressLine2', '')).replace(",", " ")
+                                        addressLine3 = str(item.get('addressLine3', '')).replace(",", " ")
+                                        licenseStatus = str(item.get('licenseStatus', ''))
+                                        licenseLevel = str(item.get('licenseLevel', ''))
+                                        profileName = str(item.get('profileName', '')).replace(",", " ")
+                                        hclStatus = str(item.get('hclStatus', ''))
+                                        ucsDomain = str(item.get('ucsDomain', ''))
+                                        hxCluster = str(item.get('hxCluster', ''))
+                                        subscriptionId = str(item.get('subscriptionId', ''))
+                                        subscriptionStartDate = str(item.get('subscriptionStartDate', ''))
+                                        subscriptionEndDate = str(item.get('subscriptionEndDate', ''))
+
+                                        if subscriptionStartDate == "None":
                                             subscriptionStartDate = ""
-                                            pass
-                                        try:
-                                            subscriptionEndDate = str(item['subscriptionEndDate'])
-                                            if subscriptionEndDate == "None":
-                                                subscriptionEndDate = ""
-                                        except KeyError:
+                                        if subscriptionEndDate == "None":
                                             subscriptionEndDate = ""
-                                            pass
+
                                         for track in successTrack:
                                             successTrackId = track['id']
                                             useCases = track['useCases']
@@ -1771,7 +1671,7 @@ def pxc_hardware_reports():
                             pass
                         else:
                             raise KeyError
-                    except KeyError:
+                    except KeyError as e:
                         print("\n!!!!!!!!\nException Thrown for", "Customer:", customerName,
                               "on Success Track ", successTrackId,
                               "Report Failed to Download\n")
@@ -1991,7 +1891,7 @@ def pxc_software_reports():
                             pass
                         else:
                             raise KeyError
-                    except KeyError:
+                    except KeyError as e:
                         print("\n!!!!!!!!\nException Thrown for ", customerName,
                               "on Success Track ", successTrackId,
                               "Report Failed to Download\n")
@@ -2193,7 +2093,7 @@ def pxc_purchased_licenses_reports():
                             pass
                         else:
                             raise KeyError
-                    except KeyError:
+                    except KeyError as e:
                         print("\n!!!!!!!!\nException Thrown for", "Customer:", customerName,
                               "on Success Track ", successTrackId,
                               "Report Failed to Download\n")
@@ -2388,7 +2288,7 @@ def pxc_licenses_reports():
                             pass
                         else:
                             raise KeyError
-                    except KeyError:
+                    except KeyError as e:
                         print("\n!!!!!!!!\nException Thrown for", "Customer:", customerName,
                               "on Success Track ", successTrackId,
                               "Report Failed to Download\n")
@@ -2473,27 +2373,19 @@ def pxc_licenses_reports():
                                     connectionStatus = str(item['connectionStatus'])
                                     productDescription = str(item['productDescription']).replace(",", " ")
                                     licenseId = str(item['license'])
-                                    try:
-                                        licenseStartDate = str(item['licenseStartDate'])
-                                        if licenseStartDate == "None":
-                                            licenseStartDate = ""
-                                    except KeyError:
+
+                                    licenseStartDate = str(item.get('licenseStartDate', ''))
+                                    if licenseStartDate == "None":
                                         licenseStartDate = ""
-                                        pass
-                                    try:
-                                        licenseEndDate = str(item['licenseEndDate'])
-                                        if licenseEndDate == "None":
-                                            licenseEndDate = ""
-                                    except KeyError:
+                                        
+                                    licenseEndDate = str(item.get('licenseEndDate', ''))
+                                    if licenseEndDate == "None":
                                         licenseEndDate = ""
-                                        pass
-                                    try:
-                                        contractNumber = str(item['contractNumber'])
-                                        if contractNumber == "None":
-                                            contractNumber = ""
-                                    except KeyError:
+                                            
+                                    contractNumber = str(item.get('contractNumber', ''))
+                                    if contractNumber == "None":
                                         contractNumber = ""
-                                        pass
+
                                     subscriptionId = str(item['subscriptionId'])
                                     supportType = str(item['supportType']).replace(",", " ")
                                     successTrack = item['successTrack']
@@ -2611,7 +2503,7 @@ def pxc_security_advisories_reports():
                             pass
                         else:
                             raise KeyError
-                    except KeyError:
+                    except KeyError as e:
                         print("\n!!!!!!!!\nException Thrown for", "Customer:", customerName,
                               "on Success Track ", successTrackId,
                               "Report Failed to Download\n")
@@ -2829,7 +2721,7 @@ def pxc_field_notices_reports():
                             pass
                         else:
                             raise KeyError
-                    except KeyError:
+                    except KeyError as e:
                         print("\n!!!!!!!!\nException Thrown for", "Customer:", customerName,
                               "on Success Track ", successTrackId,
                               "Report Failed to Download\n")
@@ -3044,7 +2936,7 @@ def pxc_priority_bugs_reports():
                             pass
                         else:
                             raise KeyError
-                    except KeyError:
+                    except KeyError as e:
                         print("\n!!!!!!!!\nException Thrown for", "Customer:",
                               customerName, "on Success Track ", successTrackId,
                               "Report Failed to Download\n")
@@ -3587,156 +3479,51 @@ def pxc_software_group_suggestions():
                         release = str(item['release']).replace(",", "-")
                         releaseNotesUrl = str(item['releaseNotesUrl'])
                         fieldNoticeSeverity = (item['fieldNoticeSeverity'])
-                        try:
-                            exposed = fieldNoticeSeverity['Exposed']
-                            fieldNoticeSeverityExposedHigh = str(exposed['High'])
-                        except KeyError:
-                            fieldNoticeSeverityExposedHigh = "0"
-                        try:
-                            exposed = fieldNoticeSeverity['Exposed']
-                            fieldNoticeSeverityExposedMedium = str(exposed['Medium'])
-                        except KeyError:
-                            fieldNoticeSeverityExposedMedium = "0"
-                        try:
-                            exposed = fieldNoticeSeverity['Exposed']
-                            fieldNoticeSeverityExposedLow = str(exposed['Low'])
-                        except KeyError:
-                            fieldNoticeSeverityExposedLow = "0"
-                        try:
-                            fixed = fieldNoticeSeverity['Fixed']
-                            fieldNoticeSeverityFixedHigh = str(fixed['High'])
-                        except KeyError:
-                            fieldNoticeSeverityFixedHigh = "0"
-                        try:
-                            fixed = fieldNoticeSeverity['Fixed']
-                            fieldNoticeSeverityFixedMedium = str(fixed['Medium'])
-                        except KeyError:
-                            fieldNoticeSeverityFixedMedium = "0"
-                        try:
-                            fixed = fieldNoticeSeverity['Fixed']
-                            fieldNoticeSeverityFixedLow = str(fixed['Low'])
-                        except KeyError:
-                            fieldNoticeSeverityFixedLow = "0"
-                        try:
-                            newExposed = fieldNoticeSeverity['New_Exposed']
-                            fieldNoticeSeverityNewExposedHigh = str(newExposed['High'])
-                        except KeyError:
-                            fieldNoticeSeverityNewExposedHigh = "0"
-                        try:
-                            newExposed = fieldNoticeSeverity['New_Exposed']
-                            fieldNoticeSeverityNewExposedMedium = str(newExposed['Medium'])
-                        except KeyError:
-                            fieldNoticeSeverityNewExposedMedium = "0"
-                        try:
-                            newExposed = fieldNoticeSeverity['New_Exposed']
-                            fieldNoticeSeverityNewExposedLow = str(newExposed['Low'])
-                        except KeyError:
-                            fieldNoticeSeverityNewExposedLow = "0"
-                        advisoriesSeverity = (item['advisoriesSeverity'])
-                        try:
-                            exposed = advisoriesSeverity['Exposed']
-                            advisoriesSeverityExposedHigh = str(exposed['High'])
-                        except KeyError:
-                            advisoriesSeverityExposedHigh = "0"
-                        try:
-                            exposed = advisoriesSeverity['Exposed']
-                            advisoriesSeverityExposedMedium = str(exposed['Medium'])
-                        except KeyError:
-                            advisoriesSeverityExposedMedium = "0"
-                        try:
-                            exposed = advisoriesSeverity['Exposed']
-                            advisoriesSeverityExposedLow = str(exposed['Low'])
-                        except KeyError:
-                            advisoriesSeverityExposedLow = "0"
-                        try:
-                            fixed = advisoriesSeverity['Fixed']
-                            advisoriesSeverityFixedHigh = str(fixed['High'])
-                        except KeyError:
-                            advisoriesSeverityFixedHigh = "0"
-                        try:
-                            fixed = advisoriesSeverity['Fixed']
-                            advisoriesSeverityFixedMedium = str(fixed['Medium'])
-                        except KeyError:
-                            advisoriesSeverityFixedMedium = "0"
-                        try:
-                            fixed = advisoriesSeverity['Fixed']
-                            advisoriesSeverityFixedLow = str(fixed['Low'])
-                        except KeyError:
-                            advisoriesSeverityFixedLow = "0"
-                        try:
-                            newExposed = advisoriesSeverity['New_Exposed']
-                            advisoriesSeverityNewExposedHigh = str(newExposed['High'])
-                        except KeyError:
-                            advisoriesSeverityNewExposedHigh = "0"
-                        try:
-                            newExposed = advisoriesSeverity['New_Exposed']
-                            advisoriesSeverityNewExposedMedium = str(newExposed['Medium'])
-                        except KeyError:
-                            advisoriesSeverityNewExposedMedium = "0"
-                        try:
-                            newExposed = advisoriesSeverity['New_Exposed']
-                            advisoriesSeverityNewExposedLow = str(newExposed['Low'])
-                        except KeyError:
-                            advisoriesSeverityNewExposedLow = "0"
-                        bugSeverity = (item['bugSeverity'])
-                        try:
-                            exposed = bugSeverity['Exposed']
-                            bugSeverityExposedHigh = str(exposed['High'])
-                        except KeyError:
-                            bugSeverityExposedHigh = "0"
-                        try:
-                            exposed = bugSeverity['Exposed']
-                            bugSeverityExposedMedium = str(exposed['Medium'])
-                        except KeyError:
-                            bugSeverityExposedMedium = "0"
-                        try:
-                            exposed = bugSeverity['Exposed']
-                            bugSeverityExposedLow = str(exposed['Low'])
-                        except KeyError:
-                            bugSeverityExposedLow = "0"
-                        try:
-                            fixed = bugSeverity['Fixed']
-                            bugSeverityFixedHigh = str(fixed['High'])
-                        except KeyError:
-                            bugSeverityFixedHigh = "0"
-                        try:
-                            fixed = bugSeverity['Fixed']
-                            bugSeverityFixedMedium = str(fixed['Medium'])
-                        except KeyError:
-                            bugSeverityFixedMedium = "0"
-                        try:
-                            fixed = bugSeverity['Fixed']
-                            bugSeverityFixedLow = str(fixed['Low'])
-                        except KeyError:
-                            bugSeverityFixedLow = "0"
-                        try:
-                            newExposed = bugSeverity['New_Exposed']
-                            bugSeverityNewExposedHigh = str(newExposed['High'])
-                        except KeyError:
-                            bugSeverityNewExposedHigh = "0"
-                        try:
-                            newExposed = bugSeverity['New_Exposed']
-                            bugSeverityNewExposedMedium = str(newExposed['Medium'])
-                        except KeyError:
-                            bugSeverityNewExposedMedium = "0"
-                        try:
-                            newExposed = bugSeverity['New_Exposed']
-                            bugSeverityNewExposedLow = str(newExposed['Low'])
-                        except KeyError:
-                            bugSeverityNewExposedLow = "0"
-                        featuresCount = (item['featuresCount'])
-                        try:
-                            featuresCountActiveFeaturesCount = str(featuresCount['activeFeaturesCount'])
-                        except KeyError:
-                            featuresCountActiveFeaturesCount = "0"
-                        try:
-                            featuresCountAffectedFeaturesCount = str(featuresCount['affectedFeaturesCount'])
-                        except KeyError:
-                            featuresCountAffectedFeaturesCount = "0"
-                        try:
-                            featuresCountFixedFeaturesCount = str(featuresCount['fixedFeaturesCount'])
-                        except KeyError:
-                            featuresCountFixedFeaturesCount = "0"
+                        fieldNoticeSeverity = item.get('fieldNoticeSeverity', {})
+                        advisoriesSeverity = item.get('advisoriesSeverity', {})
+                        bugSeverity = item.get('bugSeverity', {})
+                        featuresCount = item.get('featuresCount', {})
+
+                        fieldNoticeSeverityExposedHigh = str(fieldNoticeSeverity.get('Exposed', {}).get('High', '0'))
+                        fieldNoticeSeverityExposedMedium = str(fieldNoticeSeverity.get('Exposed', {}).get('Medium', '0'))
+                        fieldNoticeSeverityExposedLow = str(fieldNoticeSeverity.get('Exposed', {}).get('Low', '0'))
+
+                        fieldNoticeSeverityFixedHigh = str(fieldNoticeSeverity.get('Fixed', {}).get('High', '0'))
+                        fieldNoticeSeverityFixedMedium = str(fieldNoticeSeverity.get('Fixed', {}).get('Medium', '0'))
+                        fieldNoticeSeverityFixedLow = str(fieldNoticeSeverity.get('Fixed', {}).get('Low', '0'))
+
+                        fieldNoticeSeverityNewExposedHigh = str(fieldNoticeSeverity.get('New_Exposed', {}).get('High', '0'))
+                        fieldNoticeSeverityNewExposedMedium = str(fieldNoticeSeverity.get('New_Exposed', {}).get('Medium', '0'))
+                        fieldNoticeSeverityNewExposedLow = str(fieldNoticeSeverity.get('New_Exposed', {}).get('Low', '0'))
+
+                        advisoriesSeverityExposedHigh = str(advisoriesSeverity.get('Exposed', {}).get('High', '0'))
+                        advisoriesSeverityExposedMedium = str(advisoriesSeverity.get('Exposed', {}).get('Medium', '0'))
+                        advisoriesSeverityExposedLow = str(advisoriesSeverity.get('Exposed', {}).get('Low', '0'))
+
+                        advisoriesSeverityFixedHigh = str(advisoriesSeverity.get('Fixed', {}).get('High', '0'))
+                        advisoriesSeverityFixedMedium = str(advisoriesSeverity.get('Fixed', {}).get('Medium', '0'))
+                        advisoriesSeverityFixedLow = str(advisoriesSeverity.get('Fixed', {}).get('Low', '0'))
+
+                        advisoriesSeverityNewExposedHigh = str(advisoriesSeverity.get('New_Exposed', {}).get('High', '0'))
+                        advisoriesSeverityNewExposedMedium = str(advisoriesSeverity.get('New_Exposed', {}).get('Medium', '0'))
+                        advisoriesSeverityNewExposedLow = str(advisoriesSeverity.get('New_Exposed', {}).get('Low', '0'))
+
+                        bugSeverityExposedHigh = str(bugSeverity.get('Exposed', {}).get('High', '0'))
+                        bugSeverityExposedMedium = str(bugSeverity.get('Exposed', {}).get('Medium', '0'))
+                        bugSeverityExposedLow = str(bugSeverity.get('Exposed', {}).get('Low', '0'))
+
+                        bugSeverityFixedHigh = str(bugSeverity.get('Fixed', {}).get('High', '0'))
+                        bugSeverityFixedMedium = str(bugSeverity.get('Fixed', {}).get('Medium', '0'))
+                        bugSeverityFixedLow = str(bugSeverity.get('Fixed', {}).get('Low', '0'))
+
+                        bugSeverityNewExposedHigh = str(bugSeverity.get('New_Exposed', {}).get('High', '0'))
+                        bugSeverityNewExposedMedium = str(bugSeverity.get('New_Exposed', {}).get('Medium', '0'))
+                        bugSeverityNewExposedLow = str(bugSeverity.get('New_Exposed', {}).get('Low', '0'))
+
+                        featuresCountActiveFeaturesCount = str(featuresCount.get('activeFeaturesCount', '0'))
+                        featuresCountAffectedFeaturesCount = str(featuresCount.get('affectedFeaturesCount', '0'))
+                        featuresCountFixedFeaturesCount = str(featuresCount.get('fixedFeaturesCount', '0'))
+
                         with open(SWGroupSuggestionSummaries, 'a', encoding="utf-8", newline='') \
                                 as temp_target:
                             writer = csv.writer(temp_target,
@@ -3850,11 +3637,9 @@ def pxc_software_group_suggestions_assets():
                         for item in items:
                             deploymentStatus = str(item['deploymentStatus'])
                             selectedRelease = str(item['selectedRelease'])
-                            try:
-                                assetName = str(item['assetName'].replace(",", " "))
-                            except KeyError:
-                                assetName = str(item['assetHostName'].replace(",", " "))
-                                pass
+                            assetName = str(item.get('assetName', '').replace(",", " "))
+                            if not assetName:
+                                assetName = str(item.get('assetHostName', '').replace(",", " "))
                             ipAddress = str(item['ipAddress'])
                             softwareType = str(item['softwareType'].replace(",", "|"))
                             currentRelease = str(item['currentRelease'])
@@ -3985,8 +3770,8 @@ def pxc_software_group_suggestions_bug_list():
                         else:
                             print("No Software Bug Data Found .... Skipping")
                         page += 1
-            except KeyError:
-                print("No Data to process... Skipping.")
+            except KeyError as e:
+                print(f"KeyError: {e} ... Skipping.")
                 pass
 
     print("\nSearch Completed!")
@@ -4105,8 +3890,8 @@ def pxc_software_group_suggestions_field_notices():
                         else:
                             print("No Software Field Notices Data Found .... Skipping")
                         page += 1
-            except KeyError:
-                print("No Data to process... Skipping.")
+            except KeyError as e:
+                print(f"KeyError: {e} ... Skipping.")
                 pass
 
     print("\nSearch Completed!")
@@ -4229,8 +4014,8 @@ def pxc_software_group_suggestions_advisories():
                         else:
                             print("No Data Found .... Skipping")
                         page += 1
-            except KeyError:
-                print("No Data to process... Skipping.")
+            except KeyError as e:
+                print(f"KeyError: {e} ... Skipping.")
                 pass
 
     print("\nSearch Completed!")
@@ -4653,8 +4438,8 @@ def pxc_compliance_violations():
                                                 writer.writerow(CSV_Data.split())
                             page += 1
                         print(" Completed")
-                except KeyError:
-                    print("No Data to process... Skipping.")
+                except KeyError as e:
+                    print(f"KeyError: {e} ... Skipping.")
                     page -= 1
                     pass
 
@@ -4785,8 +4570,8 @@ def pxc_assets_violating_compliance_rule():
                         else:
                             print("\nNo Data Found .... Skipping")
                             print("====================\n\n")
-                except KeyError:
-                    print("No Data to process... Skipping.")
+                except KeyError as e:
+                    print(f"KeyError: {e} ... Skipping.")
                     pass
 
     print("\nSearch Completed!")
@@ -5013,8 +4798,8 @@ def pxc_compliance_suggestions():
                             else:
                                 print("No Data Found .... Skipping")
                         page += 1
-            except KeyError:
-                print("No Data to process... Skipping.")
+            except KeyError as e:
+                print(f"KeyError: {e} ... Skipping.")
                 pass
 
     print("\nSearch Completed!")
@@ -5233,8 +5018,8 @@ def pxc_asset_violations():
                                                 ruleTitle + ',' +
                                                 ruleDescription)
                                     writer.writerow(CSV_Data.split())
-            except KeyError:
-                print("No Data to process... Skipping.")
+            except KeyError as e:
+                print(f"KeyError: {e} ... Skipping.")
                 pass
 
     print("\nSearch Completed!")
@@ -5807,7 +5592,7 @@ if __name__ == '__main__':
     # setup parser
     parser = argparse.ArgumentParser(description="Your script description.")
     parser.add_argument("customer", nargs='?', default='credentials', help="Customer name")
-    parser.add_argument("-log", "--log-level", default="CRITICAL", help="Set the logging level (default: CRITICAL)")
+    parser.add_argument("-log", "--log-level", default="ERROR", help="Set the logging level (default: ERROR)")
 
     # Parse command-line arguments
     args = parser.parse_args()
