@@ -1,3 +1,4 @@
+
 """
 
                            CISCO SAMPLE CODE LICENSE
@@ -5867,7 +5868,7 @@ if __name__ == '__main__':
               "\nEnvironment is", environment)
 
         # call the function to get a valid PX Cloud API token
-        cdm.token()
+        cdm.token_get()
 
         # call the function to get the PX Cloud Customer List
         pxc_get_customers()
