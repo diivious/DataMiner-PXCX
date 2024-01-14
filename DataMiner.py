@@ -340,20 +340,40 @@ def init_logger(log_level):
         print("Invalid log level. Please use one of: DEBUG, INFO, WARNING, ERROR, CRITICAL")
         exit(1)
 
+    # Setup log storage - incase needed
+    if os.path.isdir(log_output_dir):
+        shutil.rmtree(log_output_dir)
+    os.mkdir(log_output_dir)
+
     # Set up logging based on the parsed log level
-    logging.basicConfig(format='%(levelname)s:%(funcName)s: %(message)s', level=log_level, stream=sys.stdout)
-    logger = logging.getLogger(__name__)
+    logging.basicConfig(format='%(levelname)s:%(funcName)s: %(message)s', level=log_level, force=True)
 
-    # Create a StreamHandler with flush set to True
-    handler = logging.StreamHandler()
-    logger.addHandler(handler)
+    # Create console handler
+    console_handler = logging.StreamHandler()  # Console handler
+    console_handler.setLevel(log_level)  # Console handler will show INFO and above
+    console_formatter = logging.Formatter('%(levelname)s: %(message)s')
+    console_handler.setFormatter(console_formatter)
+    logging.getLogger().addHandler(console_handler)
 
-    return logger
+    # Create file handler
+    if log_to_file == 1:
+        print(f"Logging output to file PXCloud.log for version {codeVersion}")
+        filename = os.path.join(log_output_dir, 'PXCloud.log')
+        file_handler = logging.FileHandler(filename)	# File handler
+        file_handler.setLevel(logging.DEBUG)		# File handler will show DEBUG and above
+        file_formatter = logging.Formatter('%(asctime)s [%(levelname)s] %(message)s')
+        file_handler.setFormatter(file_formatter)
+        logging.getLogger().addHandler(file_handler)
+    #end if
 
 def init_debug_file(count):
     if log_to_file == 1:
-        print(f"Logging output to file PXCloud_##.log for version {codeVersion}")
-        sys.stdout = open(log_output_dir + 'PXCloud_' + str(count) + '.log', 'wt')
+        filename = os.path.join(log_output_dir, f'PXCloud_{count}.log')
+        file_handler = logging.FileHandler(filename)	# File handler
+        file_handler.setLevel(logging.DEBUG)		# File handler will show DEBUG and above
+        file_formatter = logging.Formatter('%(asctime)s [%(levelname)s] %(message)s')
+        file_handler.setFormatter(file_formatter)
+        logging.getLogger().addHandler(file_handler)
     #end if
 
 # Function explain usage
@@ -550,7 +570,7 @@ def get_json_reply(url, tag):
 
                 if items:
                     if tries >= 2:
-                        logging.debug("\nSuccess on retry {tries}! \nContinuing.")
+                        logging.info("\nSuccess on retry {tries}! \nContinuing.")
                     else:
                         logging.debug("\nSuccess! \nContinuing.")
                     return items
@@ -574,9 +594,9 @@ def get_json_reply(url, tag):
 
         finally:
             if tries > 1:
-                logging.debug(f"Get Reply - retry {tries}.")
+                logging.info(f"Get Reply - retry {tries}.")
             tries += 1
-            time.sleep(wait_time * tries)  # increase the wait with the number of retries
+            time.sleep(wait_time)
 
     # end while
     logging.critical(f"Failed to get JSON reply after {tries} tries!")
@@ -1248,8 +1268,8 @@ def pxc_get_successtracks():
             writer.writerow(CSV_Header.split())
     tries = 1
     while True:
-        items = (get_json_reply(url=pxc_url_successTracks, tag="items"))
         try:
+            items = (get_json_reply(url=pxc_url_successTracks, tag="items"))
             if len(items) > 0:
                 for item in items:
                     successTrackName = item['successTrack'].replace(",", " ")
@@ -1282,11 +1302,9 @@ def pxc_get_successtracks():
         except Exception as Error:
             print("\n", str(Error) + "\nRetrying....", end="")
             print(f"Pausing for {wait_time} seconds before retrying...", end="")
-            time.sleep(wait_time * tries)  # increase the wait with the number of retries
+            time.sleep(wait_time)
             if tries >= 2:
                 break
-        else:
-            break
         finally:
             tries += 1
 
@@ -1426,7 +1444,7 @@ def pxc_assets_reports():
                                         zip_file.extractall(temp_dir)
                                         if tries >= 2:
                                             if debug_level == 2:
-                                                print("Success on retry!\nContinuing\n", end="")
+                                                logging.info("\nSuccess on retry {tries}! \nContinuing.")
                                 else:
                                     print("\nDownload Failed")
                                     raise Exception("File Corrupted")
@@ -1435,11 +1453,9 @@ def pxc_assets_reports():
                                 print("\nDeleting file..." + str(filename) + " " +
                                       str(FileCorruptError) + "\nRetrying....", end="")
                                 print(f"Pausing for {wait_time} seconds before retrying...", end="")
-                            time.sleep(wait_time * tries)  # increase the wait with the number of retries
+                            time.sleep(wait_time)
                             if tries >= 3:
                                 break
-                        else:
-                            break
                         finally:
                             tries += 1
                     if useProductionURL == 0:
@@ -1712,7 +1728,7 @@ def pxc_hardware_reports():
                                             zip_file.extractall(temp_dir)
                                             if tries >= 2:
                                                 if debug_level == 2:
-                                                    print("Success on retry!\nContinuing\n", end="")
+                                                    logging.info("\nSuccess on retry {tries}! \nContinuing.")
                                     else:
                                         print("\nDownload Failed")
                                         raise Exception("File Corrupted")
@@ -1722,7 +1738,7 @@ def pxc_hardware_reports():
                                 print("\nDeleting file..." + str(filename) + " " +
                                       str(FileCorruptError) + "\nRetrying....", end="")
                                 print(f"Pausing for {wait_time} seconds before retrying...", end="")
-                            time.sleep(wait_time * tries)  # increase the wait with the number of retries
+                            time.sleep(wait_time)
                             if tries >= 3:
                                 break
                         finally:
@@ -1938,7 +1954,7 @@ def pxc_software_reports():
                                             zip_file.extractall(temp_dir)
                                             if tries >= 2:
                                                 if debug_level == 2:
-                                                    print("Success on retry!\nContinuing\n", end="")
+                                                    logging.info("\nSuccess on retry {tries}! \nContinuing.")
                                     else:
                                         print("\nDownload Failed")
                                         raise Exception("File Corrupted")
@@ -1948,7 +1964,7 @@ def pxc_software_reports():
                                 print("\nDeleting file..." + str(filename) + " " +
                                       str(FileCorruptError) + "\nRetrying....", end="")
                                 print(f"Pausing for {wait_time} seconds before retrying...", end="")
-                            time.sleep(wait_time * tries)  # increase the wait with the number of retries
+                            time.sleep(wait_time)
                             if tries >= 3:
                                 break
                         finally:
@@ -2140,7 +2156,7 @@ def pxc_purchased_licenses_reports():
                                         zip_file.extractall(temp_dir)
                                         if tries >= 2:
                                             if debug_level == 2:
-                                                print("Success on retry!\nContinuing\n", end="")
+                                                logging.info("\nSuccess on retry {tries}! \nContinuing.")
                                 else:
                                     print("Download Failed")
                                     raise Exception("File Corrupted")
@@ -2150,11 +2166,9 @@ def pxc_purchased_licenses_reports():
                                 print("\nDeleting file..." + str(filename) + " " +
                                       str(FileCorruptError) + "\nRetrying....", end="")
                                 print(f"Pausing for {wait_time} seconds before retrying...", end="")
-                            time.sleep(wait_time * tries)  # increase the wait with the number of retries
+                            time.sleep(wait_time)
                             if tries >= 3:
                                 break
-                        else:
-                            break
                         finally:
                             tries += 1
                     if useProductionURL == 0:
@@ -2335,7 +2349,7 @@ def pxc_licenses_reports():
                                         zip_file.extractall(temp_dir)
                                         if tries >= 2:
                                             if debug_level == 2:
-                                                print("Success on retry!\nContinuing\n", end="")
+                                                logging.info("\nSuccess on retry {tries}! \nContinuing.")
                                 else:
                                     print("Download Failed")
                                     raise Exception("File Corrupted")
@@ -2345,11 +2359,9 @@ def pxc_licenses_reports():
                                 print("\nDeleting file..." + str(filename) + " " +
                                       str(FileCorruptError) + "\nRetrying....", end="")
                                 print(f"Pausing for {wait_time} seconds before retrying...", end="")
-                            time.sleep(wait_time * tries)  # increase the wait with the number of retries
+                            time.sleep(wait_time)
                             if tries >= 3:
                                 break
-                        else:
-                            break
                         finally:
                             tries += 1
                     if useProductionURL == 0:
@@ -2550,7 +2562,7 @@ def pxc_security_advisories_reports():
                                         zip_file.extractall(temp_dir)
                                         if tries >= 2:
                                             if debug_level == 2:
-                                                print("Success on retry!\nContinuing\n", end="")
+                                                logging.info("\nSuccess on retry {tries}! \nContinuing.")
                                 else:
                                     print("\nDownload Failed :", filename)
                                     raise Exception("File Corrupted")
@@ -2560,11 +2572,9 @@ def pxc_security_advisories_reports():
                                 print("\nDeleting file..." + str(filename) + " " +
                                       str(FileCorruptError) + "\nRetrying....", end="")
                                 print(f"Pausing for {wait_time} seconds before retrying...", end="")
-                            time.sleep(wait_time * tries)  # increase the wait with the number of retries
+                            time.sleep(wait_time)
                             if tries >= 3:
                                 break
-                        else:
-                            break
                         finally:
                             tries += 1
                     if useProductionURL == 0:
@@ -2768,7 +2778,7 @@ def pxc_field_notices_reports():
                                         zip_file.extractall(temp_dir)
                                         if tries >= 2:
                                             if debug_level == 2:
-                                                print("Success on retry!\nContinuing\n", end="")
+                                                logging.info("\nSuccess on retry {tries}! \nContinuing.")
                                 else:
                                     print("\nDownload Failed")
                                     raise Exception("File Corrupted")
@@ -2778,11 +2788,9 @@ def pxc_field_notices_reports():
                                 print("\nDeleting file..." + str(filename) + " " +
                                       str(FileCorruptError) + "\nRetrying....", end="")
                                 print(f"Pausing for {wait_time} seconds before retrying...", end="")
-                            time.sleep(wait_time * tries)  # increase the wait with the number of retries
+                            time.sleep(wait_time)
                             if tries >= 3:
                                 break
-                        else:
-                            break
                         finally:
                             tries += 1
                     if useProductionURL == 0:
@@ -2982,7 +2990,7 @@ def pxc_priority_bugs_reports():
                                         zip_file.extractall(temp_dir)
                                         if tries >= 2:
                                             if debug_level == 2:
-                                                print("Success on retry!\nContinuing\n", end="")
+                                                logging.info("\nSuccess on retry {tries}! \nContinuing.")
                                 else:
                                     print("\nDownload Failed")
                                     raise Exception("File Corrupted")
@@ -2992,11 +3000,9 @@ def pxc_priority_bugs_reports():
                                 print("\nDeleting file..." + str(filename) + " " +
                                       str(FileCorruptError) + "\nRetrying....", end="")
                                 print(f"Pausing for {wait_time} seconds before retrying...", end="")
-                            time.sleep(wait_time * tries)  # increase the wait with the number of retries
+                            time.sleep(wait_time)
                             if tries >= 3:
                                 break
-                        else:
-                            break
                         finally:
                             tries += 1
                     if useProductionURL == 0:
@@ -5600,9 +5606,6 @@ if __name__ == '__main__':
     # Parse command-line arguments
     args = parser.parse_args()
 
-    # setup the logging level
-    logger = init_logger(args.log_level.upper())
-
     # call function to load config.ini data into variables
     customer = args.customer
     load_config(customer)
@@ -5618,6 +5621,9 @@ if __name__ == '__main__':
     json_dir = json_output_dir if outputFormat == 1 or outputFormat == 2 else None
     csv_dir = csv_output_dir if outputFormat == 1 or outputFormat == 3 else None
     cdm.storage(csv_dir, json_dir, temp_dir)
+
+    # setup the logging level
+    init_logger(args.log_level.upper())
 
     # Set URL to Sandbox if useProductionURL is false
     if useProductionURL == 0:
@@ -5646,8 +5652,9 @@ if __name__ == '__main__':
         elif debug_level == 2:
             logLevel = "High"
 
-        #setup file logging
-        init_debug_file(x)
+        #setup file logging for next run
+        if x > 1:
+            init_debug_file(x)
 
         startTime = time.time()
         print('Start Time:', datetime.now())
