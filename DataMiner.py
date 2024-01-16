@@ -542,7 +542,8 @@ def get_json_reply(url, tag):
     headers = cdm.api_header()
 
     now = datetime.now()
-    logging.info(f"Start DateTime: {now}")
+    logging.debug(f"Start DateTime: {now}")
+    logging.debug(f"URL Request:{url}")
 
     while True:
         time.sleep(1/calls_per_sec)
@@ -553,19 +554,27 @@ def get_json_reply(url, tag):
             if response and response.status_code == 200:
                 reply = json.loads(response.text)
                 items = reply.get(tag, [])
+
                 if debug_level == 2:
                     print("URL Request:", url,
                           "\nURL Tag:", tag,
                           "\nHTTP Code:", response.status_code,
                           "\nReview API Headers:", response.headers,
                           "\nResponse Body:", response.content)
-
                 if items:
                     if tries >= 2:
                         logging.info("\nSuccess on retry {tries}! \nContinuing.")
                     else:
                         logging.debug("\nSuccess! \nContinuing.")
                     return items
+                else:
+                    logging.info(f"URL returned 0 items.")
+                    print("URL Request:", url,
+                          "\nURL Tag:", tag,
+                          "\nHTTP Code:", response.status_code,
+                          "\nReview API Headers:", response.headers,
+                          "\nResponse Body:", response.content)
+                    break
 
             else:
                 logging.error("\nEmpty response received. Retrying...\n")
@@ -592,7 +601,7 @@ def get_json_reply(url, tag):
 
     # end while
     logging.critical(f"Failed to get JSON reply after {tries} tries!")
-    return []
+    return None
 
 
 # Function to get the Customer List from PX Cloud
@@ -629,13 +638,12 @@ def pxc_get_customers():
         items = (get_json_reply(url, tag="items"))
 
         for item in items:
-            print(f"item: {item}")
             customerId = str(item['customerId'])
             customerNameTemp = str(item['customerName'].replace('"', ','))
             customerName = customerNameTemp.replace(',', ' ')
             successTrack = item['successTracks']
 
-            print(f"Found Customer {customerName}")
+            logging.info(f"Found Customer {customerName}")
             if not successTrack:
                 successTrack = [{'id': 'N/A', 'access': 'N/A'}]
 
@@ -900,10 +908,7 @@ def pxc_get_contracts_details():
                 continue
 
             headers = cdm.api_header()
-            url = (pxc_url_contracts_details +
-                   "?contractNumber=" + contractNumber +
-                   "&offset=0&max=50"
-                   )
+            url = (pxc_url_contracts_details + "?contractNumber=" + contractNumber + "&offset=0&max=" + max_items)
             print(f"\nScanning {customerName}")
             response = cdm.api_request("GET", url, headers, data=payload)
             if response and hasattr(response, 'text'):
@@ -915,24 +920,22 @@ def pxc_get_contracts_details():
             try:
                 if response.status_code == 200:
                     totalCount = reply["totalCount"]
-                    pages = math.ceil(totalCount / int(max_items))
-                    if debug_level == 2:
-                        print("\nTotal Pages:", pages,
-                              "\nTotal Records: ", totalCount,
-                              "\n====================")
-                    page = 1
                     if totalCount > 0:
                         logging.info(f"Found Contract Number {contractNumber}")
                     if totalCount < 1:
                         logging.warning(f"No details found for Contract Number {contractNumber}")
 
-                    while page <= pages:
-                        off_set = ((page + 1) * int(max_items))
-                        url = (pxc_url_contracts_details +
-                               "?contractNumber=" + contractNumber +
-                               "&offset=" + str(off_set) +
-                               "&max=" + max_items
-                               )
+
+                    pages = math.ceil(totalCount / int(max_items))
+                    logging.info(f"Total Pages: {pages}")
+                    logging.info(f"Total Records: {totalCount}")
+
+                    page = 0
+                    while page < pages:
+                        off_set = (page * int(max_items))
+                        page += 1
+
+                        url = (pxc_url_contracts_details + "?contractNumber=" + contractNumber + "&offset=" + str(off_set) + "&max=" + max_items)
                         items = (get_json_reply(url, tag="items"))
                         if items is not None:
                             if len(items) > 0:
@@ -959,12 +962,8 @@ def pxc_get_contracts_details():
                                         coverageEndDate = str(item['coverageEndDate'])
                                         installationQuantity = str(item['installationQuantity'])
                                         instanceNumber = str(item['instanceNumber'])
-                                        with open(contractDetails, 'a', encoding="utf-8", newline='') \
-                                                as details_target:
-                                            writer = csv.writer(details_target,
-                                                                delimiter=' ',
-                                                                quotechar=' ',
-                                                                quoting=csv.QUOTE_MINIMAL)
+                                        with open(contractDetails, 'a', encoding="utf-8", newline='') as details_target:
+                                            writer = csv.writer(details_target, delimiter=' ', quotechar=' ', quoting=csv.QUOTE_MINIMAL)
                                             CSV_Data = (customerName + ',' +
                                                         customerGUName + ',' +
                                                         customerHQName + ',' +
@@ -980,12 +979,13 @@ def pxc_get_contracts_details():
                                                         instanceNumber)
                                             writer.writerow(CSV_Data.split())
                             else:
-                                print("Items length is 0 when trying to save data...")
+                                logging.warning(f"Items length is 0 when trying to save data for page {page}")
                         else:
-                            print("\nItem None: No Data Found .... Skipping")
-                        page += 1
+                            logging.warning(f"\nItem None: No Data Found .... Skipping page {page}")
+                    # End While
+
             except KeyError as e:
-                print(f"KeyError: {e} ... Skipping.")
+                logging.critical(f"KeyError: {e} ... Skipping.")
                 pass
 
     print("\nSearch Completed!")
