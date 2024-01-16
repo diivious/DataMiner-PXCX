@@ -228,6 +228,7 @@ urlLink = "px/v1/"
 urlLinkSandbox = "sandbox/px/v1/"
 urlTimeout = 10
 environment = ""
+calls_per_sec = 3
 
 # Customer and Analytics Insights URL Variables
 pxc_url_lifecycle = "/lifecycle"
@@ -348,21 +349,12 @@ def init_logger(log_level):
     # Set up logging based on the parsed log level
     logging.basicConfig(format='%(levelname)s:%(funcName)s: %(message)s', level=log_level, force=True)
 
-    # Create console handler
-    console_handler = logging.StreamHandler()  # Console handler
-    console_handler.setLevel(log_level)  # Console handler will show INFO and above
-    console_formatter = logging.Formatter('%(levelname)s: %(message)s')
-    console_handler.setFormatter(console_formatter)
-    logging.getLogger().addHandler(console_handler)
-
     # Create file handler
     if log_to_file == 1:
         print(f"Logging output to file PXCloud.log for version {codeVersion}")
         filename = os.path.join(log_output_dir, 'PXCloud.log')
         file_handler = logging.FileHandler(filename)	# File handler
         file_handler.setLevel(logging.DEBUG)		# File handler will show DEBUG and above
-        file_formatter = logging.Formatter('%(asctime)s [%(levelname)s] %(message)s')
-        file_handler.setFormatter(file_formatter)
         logging.getLogger().addHandler(file_handler)
     #end if
 
@@ -553,7 +545,7 @@ def get_json_reply(url, tag):
     logging.info(f"Start DateTime: {now}")
 
     while True:
-        time.sleep(0.1)
+        time.sleep(1/calls_per_sec)
         cdm.token_refresh()
 
         try:
@@ -615,7 +607,7 @@ def pxc_get_customers():
     now = datetime.now()
     logging.debug(f'Start DateTime:{now}')
 
-    totalCount = get_json_reply(url=(pxc_url_customers + "?max=" + max_items), tag="totalCount")
+    totalCount = (get_json_reply(url=(pxc_url_customers + "?max=" + max_items), tag="totalCount"))
     if not totalCount:
         logging.critical("No Customers found...., exiting....")
         sys.exit()
@@ -628,15 +620,16 @@ def pxc_get_customers():
         CSV_Header = "customerId,customerName,successTrackId,successTrackAccess"
         writer = csv.writer(target, delimiter=' ', quotechar=' ', quoting=csv.QUOTE_NONE)
         writer.writerow(CSV_Header.split())
+
     while page < pages:
         off_set = (page * int(max_items))
-        url = (pxc_url_customers +
-               "?offset=" + str(off_set) +
-               "&max=" + max_items
-               )
-        items = (get_json_reply(url, tag="items"))
         page += 1
+
+        url = (pxc_url_customers + "?offset=" + str(off_set) + "&max=" + max_items)
+        items = (get_json_reply(url, tag="items"))
+
         for item in items:
+            print(f"item: {item}")
             customerId = str(item['customerId'])
             customerNameTemp = str(item['customerName'].replace('"', ','))
             customerName = customerNameTemp.replace(',', ' ')
@@ -656,6 +649,7 @@ def pxc_get_customers():
                                 successTrackId + ',' +
                                 trackAccess)
                     writer.writerow(CSV_Data.split())
+
         if outputFormat == 1 or outputFormat == 2:
             if items is not None:
                 if len(items) > 0:
@@ -668,7 +662,6 @@ def pxc_get_customers():
     now = datetime.now()
     logging.debug(f'Stop DateTime:{now}')
     print("====================\n")
-
 
 # Function to get the Contract List from PX Cloud
 # This API will fetch list of partner contracts transacted with Cisco.
