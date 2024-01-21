@@ -1289,6 +1289,7 @@ def pxc_get_successtracks():
                             with open(json_output_dir + "SuccessTracks.json", 'w') as json_file:
                                 json.dump(items, json_file)
                             print(f"Saving {json_file.name}")
+                break
             else:
                 print("\nError")
                 raise Exception("Error")
@@ -1298,6 +1299,8 @@ def pxc_get_successtracks():
             time.sleep(wait_time)
             if tries >= 2:
                 break
+        else:
+            break
         finally:
             tries += 1
 
