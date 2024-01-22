@@ -1430,7 +1430,7 @@ def pxc_assets_reports():
                         print("Scanning for data...")
                         filename = (temp_dir + customerId + "_Assets_" + location.split('/')[-1] + '.zip')
                         headers = cdm.api_header()
-                        response = cdm.api_request("GET", location, headers, payload)
+                        response = cdm.api_request("GET", location, headers, data=payload)
                         try:
                             with open(filename, 'wb') as file:
                                 file.write(response.content)
@@ -1712,7 +1712,7 @@ def pxc_hardware_reports():
                         print("Scanning for data...")
                         filename = (temp_dir + location.split('/')[-1] + '.zip')
                         headers = cdm.api_header()
-                        response = cdm.api_request("GET", location, headers, payload)
+                        response = cdm.api_request("GET", location, headers, data=payload)
 
                         try:
                             if response:
@@ -1934,7 +1934,7 @@ def pxc_software_reports():
                         print("Scanning for data...")
                         filename = (temp_dir + location.split('/')[-1] + '.zip')
                         headers = cdm.api_header()
-                        response = cdm.api_request("GET", location, headers, payload)
+                        response = cdm.api_request("GET", location, headers, data=payload)
                         if response and debug_level == 2:
                             print("\nLocation URL Returned:", location,
                                   "\nHTTP Code:", response.status_code,
@@ -2141,7 +2141,7 @@ def pxc_purchased_licenses_reports():
                         print("Scanning for data...")
                         filename = (temp_dir + location.split('/')[-1] + '.zip')
                         headers = cdm.api_header()
-                        response = cdm.api_request("GET", location, headers, payload)
+                        response = cdm.api_request("GET", location, headers, data=payload)
 
                         try:
                             with open(filename, 'wb') as file:
@@ -2334,7 +2334,7 @@ def pxc_licenses_reports():
                         print("Scanning for data...")
                         filename = (temp_dir + location.split('/')[-1] + '.zip')
                         headers = cdm.api_header()
-                        response = cdm.api_request("GET", location, headers, payload)
+                        response = cdm.api_request("GET", location, headers, data=payload)
 
                         try:
                             with open(filename, 'wb') as file:
@@ -2547,7 +2547,7 @@ def pxc_security_advisories_reports():
                         print("Scanning for data...")
                         filename = (temp_dir + location.split('/')[-1] + '.zip')
                         headers = cdm.api_header()
-                        response = cdm.api_request("GET", location, headers, payload)
+                        response = cdm.api_request("GET", location, headers, data=payload)
 
                         try:
                             with open(filename, 'wb') as file:
@@ -2763,7 +2763,7 @@ def pxc_field_notices_reports():
                         print("Scanning for data...")
                         filename = (temp_dir + location.split('/')[-1] + '.zip')
                         headers = cdm.api_header()
-                        response = cdm.api_request("GET", location, headers, payload)
+                        response = cdm.api_request("GET", location, headers, data=payload)
 
                         try:
                             with open(filename, 'wb') as file:
@@ -2975,7 +2975,7 @@ def pxc_priority_bugs_reports():
                         print("Scanning for data...")
                         filename = (temp_dir + location.split('/')[-1] + '.zip')
                         headers = cdm.api_header()
-                        response = cdm.api_request("GET", location, headers, payload)
+                        response = cdm.api_request("GET", location, headers, data=payload)
 
                         try:
                             with open(filename, 'wb') as file:
