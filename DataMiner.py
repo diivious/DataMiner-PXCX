@@ -520,8 +520,8 @@ def location_ready_status(location, headers):
                 location = response.headers['Location']
                 break
             else:
+                nextPoll = int(response.json().get('suggestedNextPollTimeInMins', 60))
                 print(f'API Requested {nextPoll} minute(s) for report to complete...')
-                nextPoll = int(response.json().get('suggestedNextPollTimeInMins', 1))
                 time.sleep(nextPoll * 10)
         else:
             # failed to get a valid respone from Cisco.  Try 3 more times max
