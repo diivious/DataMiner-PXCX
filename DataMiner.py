@@ -486,11 +486,11 @@ def proccess_sandbox_files(filename, customerid, reportid, json_filename):
             os.rename((temp_dir + jsonfile), (temp_dir + customerid + reportid + json_filename))
 
 #
-def location_ready_status(location, headers):
+def location_ready_status(location, header):
     tries = 0
     while True:
         print('Checking report ready status')
-        status_code, response = cdm.api_request("GET", location, headers, allow_redirects=False)
+        status_code, response = cdm.api_request("GET", location, header, allow_redirects=False)
         if response:
             if response.status_code == 302 or response.status_code == 303:
                 # Handle the redirection as needed
@@ -517,7 +517,6 @@ def location_ready_status(location, headers):
 def get_json_reply(url, tag):
     tries = 1
     response = []
-    headers = cdm.api_header()
 
     now = datetime.now()
     logging.debug(f"Start DateTime: {now}")
@@ -526,9 +525,10 @@ def get_json_reply(url, tag):
     while True:
         time.sleep(1/calls_per_sec)
         cdm.token_refresh()
+        header = cdm.api_header()
 
         try:
-            status_code, response = cdm.api_request("GET", url, headers, data=payload)
+            status_code, response = cdm.api_request("GET", url, header, data=payload)
             if response and response.status_code == 200:
                 reply = json.loads(response.text)
                 items = reply.get(tag, [])
@@ -681,6 +681,8 @@ def pxc_get_contracts():
         writer.writerow(CSV_Header.split())
         while page < pages:
             cdm.token_refresh()
+            header = cdm.api_header()
+
             off_set = (page * int(max_items))
             url = (pxc_url_contracts +
                    "?offset=" + str(off_set) +
@@ -789,6 +791,7 @@ def pxc_get_contractswithcustomers():
         writer.writerow(CSV_Header.split())
         while page < pages:
             cdm.token_refresh()
+            header = cdm.api_header()
             off_set = (page * int(max_items))
             url = (pxc_url_contractswithcustomers +
                    "?offset=" + str(off_set) +
@@ -873,6 +876,7 @@ def pxc_get_contracts_details():
         contractList = csv.DictReader(target)
         for row in contractList:
             cdm.token_refresh()
+            header = cdm.api_header()
             customerName = "None"
             contractNumber = "None"
 
@@ -885,10 +889,9 @@ def pxc_get_contracts_details():
                 print("No contractNumber for Row:", row)
                 continue
 
-            headers = cdm.api_header()
             url = (pxc_url_contracts_details + "?contractNumber=" + contractNumber + "&offset=0&max=" + max_items)
             print(f"\nScanning {customerName} : Contract: {contractNumber}")
-            status_code, response = cdm.api_request("GET", url, headers, data=payload)
+            status_code, response = cdm.api_request("GET", url, header, data=payload)
             if response and hasattr(response, 'text'):
                 reply = json.loads(response.text)
             else:
@@ -1358,10 +1361,10 @@ def pxc_assets_reports():
             print(f"\nRequesting Asset data for {customerName}")
             if not successTrackId == "N/A":
                 cdm.token_refresh()
+                header = cdm.api_header()
                 url = (pxc_url_customers + "/" + customerId + "/reports")
                 data_payload = json.dumps({"reportName": "Assets", "successTrackId": successTrackId})
-                headers = cdm.api_header()
-                status_code, response = cdm.api_request("POST", url, headers, data=data_payload)
+                status_code, response = cdm.api_request("POST", url, header, data=data_payload)
                 if not response:
                     print("Asset Report missing response.. continuing")
                     continue
@@ -1391,7 +1394,7 @@ def pxc_assets_reports():
                             print("Making API Call again with the following...")
                             print("URL: ", url)
                             print("Data Payload: ", data_payload)
-                            response = px.request("POST", url, headers, data=data_payload)
+                            response = px.request("POST", url, header, data=data_payload)
                             print("Report request URL:", url,
                                   "\nReport details:", data_payload,
                                   "\nHTTP Code:", response.status_code,
@@ -1400,15 +1403,16 @@ def pxc_assets_reports():
                             print("Review for", "Customer:", customerId, "on Success Track", successTrackId,
                                   "Report Failed to Download\n")
                     location = response.headers["location"]
-                    location_ready_status(location, headers)
+                    location_ready_status(location, header)
                     json_filename = (location.split('/')[-1] + '.json')
                     tries = 1
                     while True:
                         time.sleep(wait_time * tries)
                         print("Scanning Customer ID {customerId} for Asset data...")
                         filename = (temp_dir + customerId + "_Assets_" + location.split('/')[-1] + '.zip')
-                        headers = cdm.api_header()
-                        status_code, response = cdm.api_request("GET", location, headers, data=payload)
+                        cdm.token_refresh()
+                        header = cdm.api_header()
+                        status_code, response = cdm.api_request("GET", location, header, data=payload)
                         try:
                             with open(filename, 'wb') as file:
                                 file.write(response.content)
@@ -1647,10 +1651,10 @@ def pxc_hardware_reports():
             print(f"\nRequesting hardware data for {customerName}")
             if not successTrackId == "N/A":
                 cdm.token_refresh()
+                header = cdm.api_header()
                 url = (pxc_url_customers + "/" + customerId + "/reports")
                 data_payload = json.dumps({"reportName": "hardware", "successTrackId": successTrackId})
-                headers = cdm.api_header()
-                status_code, response = cdm.api_request("POST", url, headers, data=data_payload)
+                status_code, response = cdm.api_request("POST", url, header, data=data_payload)
                 if not response:
                     print("Hardware Report missing response.. continuing")
                     continue
@@ -1676,21 +1680,22 @@ def pxc_hardware_reports():
                             print("Making API Call again with the following...")
                             print("URL: ", url)
                             print("Data Payload: ", data_payload)
-                            status_code, response = cdm.api_request("POST", url, headers, data=data_payload)
+                            status_code, response = cdm.api_request("POST", url, header, data=data_payload)
                             print(f"Review for  {customerName} on Success Track {successTrackId} "
                                   f"Report Failed to Download\n")
                         #end while
 
                     location = response.headers["location"]
-                    location_ready_status(location, headers)
+                    location_ready_status(location, header)
                     json_filename = (location.split('/')[-1] + '.json')
                     tries = 1
                     while True:
                         time.sleep(tries)
                         print("Scanning Hardware Report for data...")
                         filename = (temp_dir + location.split('/')[-1] + '.zip')
-                        headers = cdm.api_header()
-                        status_code, response = cdm.api_request("GET", location, headers, data=payload)
+                        cdm.token_refresh()
+                        header = cdm.api_header()
+                        status_code, response = cdm.api_request("GET", location, header, data=payload)
 
                         try:
                             if response:
@@ -1867,10 +1872,10 @@ def pxc_software_reports():
             print(f"\nRequesting software data for {customerName}")
             if not successTrackId == "N/A":
                 cdm.token_refresh()
+                header = cdm.api_header()
                 url = (pxc_url_customers + "/" + customerId + "/reports")
                 data_payload = json.dumps({"reportName": "software", "successTrackId": successTrackId})
-                headers = cdm.api_header()
-                status_code, response = cdm.api_request("POST", url, headers, data=data_payload)
+                status_code, response = cdm.api_request("POST", url, header, data=data_payload)
                 if not response:
                     print("Software Report missing response.. continuing")
                     continue
@@ -1900,19 +1905,20 @@ def pxc_software_reports():
                             print("Making API Call again with the following...")
                             print("URL: ", url)
                             print("Data Payload: ", data_payload)
-                            status_code, response = cdm.api_request("POST", url, headers, data=data_payload)
+                            status_code, response = cdm.api_request("POST", url, header, data=data_payload)
                             print("Review for", "Customer:", customerName, "on Success Track ", successTrackId,
                                   "Report Failed to Download\n")
                     location = response.headers["location"]
-                    location_ready_status(location, headers)
+                    location_ready_status(location, header)
                     json_filename = (location.split('/')[-1] + '.json')
                     tries = 1
                     while True:
                         time.sleep(tries)
                         print("Scanning Software Report for data...")
                         filename = (temp_dir + location.split('/')[-1] + '.zip')
-                        headers = cdm.api_header()
-                        status_code, response = cdm.api_request("GET", location, headers, data=payload)
+                        cdm.token_refresh()
+                        header = cdm.api_header()
+                        status_code, response = cdm.api_request("GET", location, header, data=payload)
                         if response and debug_level == 2:
                             print("\nLocation URL Returned:", location,
                                   "\nHTTP Code:", response.status_code,
@@ -2069,10 +2075,10 @@ def pxc_purchased_licenses_reports():
             print(f"\nRequesting purchased Licenses data for {customerName}")
             if not successTrackId == "N/A":
                 cdm.token_refresh()
+                header = cdm.api_header()
                 url = (pxc_url_customers + "/" + customerId + "/reports")
                 data_payload = json.dumps({"reportName": "PurchasedL4icenses", "successTrackId": successTrackId})
-                headers = cdm.api_header()
-                status_code, response = cdm.api_request("POST", url, headers, data=data_payload)
+                status_code, response = cdm.api_request("POST", url, header, data=data_payload)
                 if not response:
                     print("Purchased License Report missing response.. continuing")
                     continue
@@ -2102,7 +2108,7 @@ def pxc_purchased_licenses_reports():
                             print("Making API Call again with the following...")
                             print("URL: ", url)
                             print("Data Payload: ", data_payload)
-                            status_code, response = cdm.api_request("POST", url, headers, data=data_payload)
+                            status_code, response = cdm.api_request("POST", url, header, data=data_payload)
                             print("Report request URL:", url,
                                   "\nReport details:", data_payload,
                                   "\nHTTP Code:", response.status_code,
@@ -2111,15 +2117,16 @@ def pxc_purchased_licenses_reports():
                             print("Review for", "Customer:", customerId, "on Success Track ", successTrackId,
                                   "Report Failed to Download\n")
                     location = response.headers["location"]
-                    location_ready_status(location, headers)
+                    location_ready_status(location, header)
                     json_filename = (location.split('/')[-1] + '.json')
                     tries = 1
                     while True:
                         time.sleep(tries)
                         print("Scanning Purchased License Report for data...")
                         filename = (temp_dir + location.split('/')[-1] + '.zip')
-                        headers = cdm.api_header()
-                        status_code, response = cdm.api_request("GET", location, headers, data=payload)
+                        cdm.token_refresh()
+                        header = cdm.api_header()
+                        status_code, response = cdm.api_request("GET", location, header, data=payload)
 
                         try:
                             with open(filename, 'wb') as file:
@@ -2263,10 +2270,10 @@ def pxc_licenses_reports():
             print(f"\nRequesting license data for {customerName}")
             if not successTrackId == "N/A":
                 cdm.token_refresh()
+                header = cdm.api_header()
                 url = (pxc_url_customers + "/" + customerId + "/reports")
                 data_payload = json.dumps({"reportName": "Licenses", "successTrackId": successTrackId})
-                headers = cdm.api_header()
-                status_code, response = cdm.api_request("POST", url, headers, data=data_payload)
+                status_code, response = cdm.api_request("POST", url, header, data=data_payload)
                 if not response:
                     print("License Report missing response.. continuing")
                     continue
@@ -2295,7 +2302,7 @@ def pxc_licenses_reports():
                             print("Making API Call again with the following...")
                             print("URL: ", url)
                             print("Data Payload: ", data_payload)
-                            status_code, response = cdm.api_request("POST", url, headers, data=data_payload)
+                            status_code, response = cdm.api_request("POST", url, header, data=data_payload)
                             print("Report request URL:", url,
                                   "\nReport details:", data_payload,
                                   "\nHTTP Code:", response.status_code,
@@ -2304,15 +2311,16 @@ def pxc_licenses_reports():
                             print("Review for", "Customer:", customerName, "on Success Track ", successTrackId,
                                   "Report Failed to Download\n")
                     location = response.headers["location"]
-                    location_ready_status(location, headers)
+                    location_ready_status(location, header)
                     json_filename = (location.split('/')[-1] + '.json')
                     tries = 1
                     while True:
                         time.sleep(tries)
                         print("Scanning License Report for data...")
                         filename = (temp_dir + location.split('/')[-1] + '.zip')
-                        headers = cdm.api_header()
-                        status_code, response = cdm.api_request("GET", location, headers, data=payload)
+                        cdm.token_refresh()
+                        header = cdm.api_header()
+                        status_code, response = cdm.api_request("GET", location, header, data=payload)
 
                         try:
                             with open(filename, 'wb') as file:
@@ -2476,10 +2484,10 @@ def pxc_security_advisories_reports():
             print(f"\nRequesting security Advisories for {customerName}")
             if not successTrackId == "N/A":
                 cdm.token_refresh()
+                header = cdm.api_header()
                 url = (pxc_url_customers + "/" + customerId + "/reports")
                 data_payload = json.dumps({"reportName": "securityadvisories", "successTrackId": successTrackId})
-                headers = cdm.api_header()
-                status_code, response = cdm.api_request("POST", url, headers, data=data_payload)
+                status_code, response = cdm.api_request("POST", url, header, data=data_payload)
                 if not response:
                     print("Security Advisories missing response.. continuing")
                     continue
@@ -2508,7 +2516,7 @@ def pxc_security_advisories_reports():
                             print("Making API Call again with the following...")
                             print("URL: ", url)
                             print("Data Payload: ", data_payload)
-                            status_code, response = cdm.api_request("POST", url, headers, data=data_payload)
+                            status_code, response = cdm.api_request("POST", url, header, data=data_payload)
                             print("Report request URL:", url,
                                   "\nReport details:", data_payload,
                                   "\nHTTP Code:", response.status_code,
@@ -2517,15 +2525,16 @@ def pxc_security_advisories_reports():
                             print("Review for ", customerName, "on Success Track ", successTrackId,
                                   "Report Failed to Download\n")
                     location = response.headers["location"]
-                    location_ready_status(location, headers)
+                    location_ready_status(location, header)
                     json_filename = (location.split('/')[-1] + '.json')
                     tries = 1
                     while True:
                         time.sleep(tries)
                         print("Scanning Security Advisories for data...")
                         filename = (temp_dir + location.split('/')[-1] + '.zip')
-                        headers = cdm.api_header()
-                        status_code, response = cdm.api_request("GET", location, headers, data=payload)
+                        cdm.token_refresh()
+                        header = cdm.api_header()
+                        status_code, response = cdm.api_request("GET", location, header, data=payload)
 
                         try:
                             with open(filename, 'wb') as file:
@@ -2692,10 +2701,10 @@ def pxc_field_notices_reports():
             print(f"\nRequesting Field Notices for {customerName}")
             if not successTrackId == "N/A":
                 cdm.token_refresh()
+                header = cdm.api_header()
                 url = (pxc_url_customers + "/" + customerId + "/reports")
                 data_payload = json.dumps({"reportName": "FieldNotices", "successTrackId": successTrackId})
-                headers = cdm.api_header()
-                status_code, response = cdm.api_request("POST", url, headers, data=data_payload)
+                status_code, response = cdm.api_request("POST", url, header, data=data_payload)
                 if not response:
                     print("Feild Notices Report missing response.. continuing")
                     continue
@@ -2724,7 +2733,7 @@ def pxc_field_notices_reports():
                             print("Making API Call again with the following...")
                             print("URL: ", url)
                             print("Data Payload: ", data_payload)
-                            status_code, response = cdm.api_request("POST", url, headers, data=data_payload)
+                            status_code, response = cdm.api_request("POST", url, header, data=data_payload)
                             print("Report request URL:", url,
                                   "\nReport details:", data_payload,
                                   "\nHTTP Code:", response.status_code,
@@ -2733,15 +2742,16 @@ def pxc_field_notices_reports():
                             print("Review for", "Customer:", customerName, "on Success Track ", successTrackId,
                                   "Report Failed to Download\n")
                     location = response.headers["location"]
-                    location_ready_status(location, headers)
+                    location_ready_status(location, header)
                     json_filename = (location.split('/')[-1] + '.json')
                     tries = 1
                     while True:
                         time.sleep(tries)
                         print("Scanning Field Notices for data...")
                         filename = (temp_dir + location.split('/')[-1] + '.zip')
-                        headers = cdm.api_header()
-                        status_code, response = cdm.api_request("GET", location, headers, data=payload)
+                        cdm.token_refresh()
+                        header = cdm.api_header()
+                        status_code, response = cdm.api_request("GET", location, header, data=payload)
 
                         try:
                             with open(filename, 'wb') as file:
@@ -2905,10 +2915,10 @@ def pxc_priority_bugs_reports():
             print(f"\nRequesting priority Bugs for {customerName}")
             if not successTrackId == "N/A":
                 cdm.token_refresh()
+                header = cdm.api_header()
                 url = (pxc_url_customers + "/" + customerId + "/reports")
                 data_payload = json.dumps({"reportName": "prioritybugs", "successTrackId": successTrackId})
-                headers = cdm.api_header()
-                status_code, response = cdm.api_request("POST", url, headers, data=data_payload)
+                status_code, response = cdm.api_request("POST", url, header, data=data_payload)
                 if not response:
                     print("Priority Bugs Report missing response.. continuing")
                     continue
@@ -2936,7 +2946,7 @@ def pxc_priority_bugs_reports():
                             print("Making API Call again with the following...")
                             print("URL: ", url)
                             print("Data Payload: ", data_payload)
-                            status_code, response = cdm.api_request("POST", url, headers, data=data_payload)
+                            status_code, response = cdm.api_request("POST", url, header, data=data_payload)
                             print("Report request URL:", url,
                                   "\nReport details:", data_payload,
                                   "\nHTTP Code:", response.status_code,
@@ -2945,15 +2955,16 @@ def pxc_priority_bugs_reports():
                             print("Review for", "Customer:", customerName, "on Success Track ", successTrackId,
                                   "Report Failed to Download\n")
                     location = response.headers["location"]
-                    location_ready_status(location, headers)
+                    location_ready_status(location, header)
                     json_filename = (location.split('/')[-1] + '.json')
                     tries = 1
                     while True:
                         time.sleep(tries)
                         print("Scanning Priority Bugs Reports for data...")
                         filename = (temp_dir + location.split('/')[-1] + '.zip')
-                        headers = cdm.api_header()
-                        status_code, response = cdm.api_request("GET", location, headers, data=payload)
+                        cdm.token_refresh()
+                        header = cdm.api_header()
+                        status_code, response = cdm.api_request("GET", location, header, data=payload)
 
                         try:
                             with open(filename, 'wb') as file:
@@ -3097,6 +3108,7 @@ def pxc_get_lifecycle():
             print(f"\nSanning lifecycle data for {customerName} on Success Track {successTrackId}")
             if not successTrackId == "N/A":
                 cdm.token_refresh()
+                header = cdm.api_header()
                 items = (get_json_reply(url=(
                         pxc_url_customers + "/" +
                         customerId +
@@ -3197,6 +3209,7 @@ def pxc_software_groups():
             successTrackId = row['successTrackId']
             if not successTrackId == "N/A":
                 cdm.token_refresh()
+                header = cdm.api_header()
                 print(f"\nScanning Software Groups: {customerName} SuccessTrackId {successTrackId}")
                 url = (pxc_url_customers + "/" +
                        customerId +
@@ -3355,6 +3368,7 @@ def pxc_software_group_suggestions():
             suggestionId = row['suggestionId']
             if not successTrackId == "N/A":
                 cdm.token_refresh()
+                header = cdm.api_header()
                 logging.info(f"\nFound Software Group Suggestion for {customerName}")
                 url = (pxc_url_customers + "/" +
                        customerId +
@@ -3362,8 +3376,7 @@ def pxc_software_group_suggestions():
                        "?successTrackId=" + successTrackId +
                        "&suggestionId=" + suggestionId)
                 try:
-                    headers = cdm.api_header()
-                    status_code, response = cdm.api_request("GET", url, headers)
+                    status_code, response = cdm.api_request("GET", url, header)
                     if response and hasattr(response, 'text'):
                         reply = json.loads(response.text)
                     else:
@@ -3600,6 +3613,7 @@ def pxc_software_group_suggestions_assets():
             softwareGroupId = row['softwareGroupId']
             if not successTrackId == "N/A":
                 cdm.token_refresh()
+                header = cdm.api_header()
                 logging.info(f"\nFound Software Group ID {softwareGroupId} Suggestion Asset for {customerName}")
                 url = (pxc_url_customers + "/" +
                        customerId +
@@ -3683,7 +3697,8 @@ def pxc_software_group_suggestions_bug_list():
             customerName = row['customerName']
             successTrackId = row['successTrackId']
             machineSuggestionId = row['machineSuggestionId']
-            headers = cdm.api_header()
+            cdm.token_refresh()
+            header = cdm.api_header()
             if not successTrackId == "N/A":
                 cdm.token_refresh()
                 logging.info(f"\nFound machine suggestion ID of {machineSuggestionId} for {customerName}")
@@ -3694,7 +3709,7 @@ def pxc_software_group_suggestions_bug_list():
                        "&max=" + max_items +
                        "&machineSuggestionId=" + machineSuggestionId +
                        "&successTrackId=" + successTrackId)
-            status_code, response = cdm.api_request("GET", url, headers, data=payload)
+            status_code, response = cdm.api_request("GET", url, header, data=payload)
             if response and hasattr(response, 'text'):
                 reply = json.loads(response.text)
             else:
@@ -3795,11 +3810,11 @@ def pxc_software_group_suggestions_field_notices():
             customerName = row['customerName']
             successTrackId = row['successTrackId']
             machineSuggestionId = row['machineSuggestionId']
-            headers = cdm.api_header()
+            cdm.token_refresh()
+            header = cdm.api_header()
             print(f"Software Group Suggestions Field Notices for {customerName} "
                   f"on Success Track {successTrackId}")
             if not successTrackId == "N/A":
-                cdm.token_refresh()
                 url = (pxc_url_customers + "/" +
                        customerId +
                        pxc_url_software_group_suggestions_field_notices +
@@ -3807,7 +3822,7 @@ def pxc_software_group_suggestions_field_notices():
                        "&max=" + max_items +
                        "&machineSuggestionId=" + machineSuggestionId +
                        "&successTrackId=" + successTrackId)
-                status_code, response = cdm.api_request("GET", url, headers, data=payload)
+                status_code, response = cdm.api_request("GET", url, header, data=payload)
                 if response and hasattr(response, 'text'):
                     reply = json.loads(response.text)
                 else:
@@ -3913,11 +3928,11 @@ def pxc_software_group_suggestions_advisories():
         csvreader = csv.DictReader(target)
         for row in csvreader:
             cdm.token_refresh()
+            header = cdm.api_header()
             customerId = row['customerId']
             customerName = row['customerName']
             successTrackId = row['successTrackId']
             machineSuggestionId = row['machineSuggestionId']
-            headers = cdm.api_header()
             print(f"Software Group Suggestions Security Advisories for {customerName}"
                   f" on Success Track {successTrackId}")
             url = (pxc_url_customers + "/" +
@@ -3927,7 +3942,7 @@ def pxc_software_group_suggestions_advisories():
                    "&max=" + max_items +
                    "&machineSuggestionId=" + machineSuggestionId +
                    "&successTrackId=" + successTrackId)
-            status_code, response = cdm.api_request("GET", url, headers, data=payload)
+            status_code, response = cdm.api_request("GET", url, header, data=payload)
             if response and hasattr(response, 'text'):
                 reply = json.loads(response.text)
             else:
@@ -4042,6 +4057,7 @@ def pxc_automated_fault_management_faults():
         for row in custList:
             if not row["successTrackId"] == "N/A":
                 cdm.token_refresh()
+                header = cdm.api_header()
                 customerId = row['customerId']
                 customerName = row['customerName']
                 successTrackId = row['successTrackId']
@@ -4136,6 +4152,7 @@ def pxc_automated_fault_management_fault_summary():
         for row in custList:
             if not row["successTrackId"] == "N/A":
                 cdm.token_refresh()
+                header = cdm.api_header()
                 customerId = row['customerId']
                 customerName = row['customerName']
                 successTrackId = row['successTrackId']
@@ -4231,6 +4248,7 @@ def pxc_automated_fault_management_affected_assets():
         for row in custList:
             if not row["successTrackId"] == "N/A":
                 cdm.token_refresh()
+                header = cdm.api_header()
                 customerId = row['customerId']
                 customerName = row['customerName']
                 successTrackId = row['successTrackId']
@@ -4334,16 +4352,16 @@ def pxc_compliance_violations():
             customerId = row['customerId']
             customerName = row['customerName']
             successTrackId = row['successTrackId']
-            headers = cdm.api_header()
+            cdm.token_refresh()
+            header = cdm.api_header()
             if not successTrackId == "N/A":
-                cdm.token_refresh()
                 url = (pxc_url_customers + "/" +
                        customerId +
                        pxc_url_compliance_violations +
                        "?successTrackId=" + successTrackId +
                        "&days=30" +
                        "&max=" + max_items)
-                status_code, response = cdm.api_request("GET", url, headers, data=payload)
+                status_code, response = cdm.api_request("GET", url, header, data=payload)
                 if response and hasattr(response, 'text'):
                     reply = json.loads(response.text)
                 else:
@@ -4472,6 +4490,7 @@ def pxc_assets_violating_compliance_rule():
         fileNum = 0
         for row in custList:
             cdm.token_refresh()
+            header = cdm.api_header()
             fileNum += 1
             customerId = row['customerId']
             customerName = row['customerName']
@@ -4592,6 +4611,7 @@ def pxc_compliance_rule_details():
         fileNum = 0
         for row in custList:
             cdm.token_refresh()
+            header = cdm.api_header()
             fileNum += 1
             customerId = row['customerId']
             customerName = row['customerName']
@@ -4613,8 +4633,7 @@ def pxc_compliance_rule_details():
                    "&successTrackId=" + successTrackId +
                    "&max=" + max_items)
             try:
-                headers = cdm.api_header()
-                status_code, response = cdm.api_requests("GET", url, headers)
+                status_code, response = cdm.api_requests("GET", url, header)
                 if response and hasattr(response, 'text'):
                     reply = json.loads(response.text)
                 else:
@@ -4692,6 +4711,7 @@ def pxc_compliance_suggestions():
         fileNum = 0
         for row in custList:
             cdm.token_refresh()
+            header = cdm.api_header()
             fileNum += 1
             customerId = row['customerId']
             customerName = row['customerName']
@@ -4701,7 +4721,6 @@ def pxc_compliance_suggestions():
             policyGroupId = row['policyGroupId']
             ruleId = row['ruleId']
             print(f"\nCompliance Suggestions for Customer :{customerName} on Success Track {successTrackId}")
-            headers = cdm.api_header()
             url = (pxc_url_customers + "/" +
                    customerId +
                    pxc_url_compliance_suggestions +
@@ -4714,7 +4733,7 @@ def pxc_compliance_suggestions():
             if fileNum == 1:
                 print(f"Found Compliance Suggestions on Success Track {successTrackId} "
                       f"for {customerName}")
-            status_code, response = cdm.api_request("GET", url, headers, data=payload)
+            status_code, response = cdm.api_request("GET", url, header, data=payload)
             if response and hasattr(response, 'text'):
                 reply = json.loads(response.text)
             else:
@@ -4833,6 +4852,7 @@ def pxc_assets_with_violations():
             fileNum += 1
             if not row["successTrackId"] == "N/A":
                 cdm.token_refresh()
+                header = cdm.api_header()
                 customerName = row["customerName"]
                 customerId = row["customerId"]
                 successTrackId = row["successTrackId"]
@@ -4942,6 +4962,7 @@ def pxc_asset_violations():
         fileNum = 0
         for row in custList:
             cdm.token_refresh()
+            header = cdm.api_header()
             fileNum += 1
             customerId = row['customerId']
             customerName = row['customerName']
@@ -5044,14 +5065,14 @@ def pxc_obtained():
                 print(f"Obtained data for {customerName} on Success Track {successTrackId}")
             if not successTrackId == "N/A":
                 cdm.token_refresh()
+                header = cdm.api_header()
                 print(f"Found Customer {customerName} on Success Track {successTrackId}")
                 url = (pxc_url_customers + "/" +
                        customerId +
                        pxc_url_compliance_obtained +
                        "?successTrackId=" + successTrackId)
                 try:
-                    headers = cdm.api_header()
-                    status_code, response = cdm.api_requests("GET", url, headers)
+                    status_code, response = cdm.api_requests("GET", url, header)
                     if response and hasattr(response, 'text'):
                         reply = json.loads(response.text)
                     else:
@@ -5134,6 +5155,7 @@ def pxc_crash_risk_assets():
             successTrackId = row['successTrackId']
             if not row["successTrackId"] == "N/A":
                 cdm.token_refresh()
+                header = cdm.api_header()
                 logging.info(f"\nFound {customerName} on Success Track{successTrackId}")
                 url = (pxc_url_customers + "/" +
                        customerId +
@@ -5232,6 +5254,7 @@ def pxc_crash_risk_factors():
             if not row["successTrackId"] == "N/A":
                 logging.info(f"\nFound {customerName} with Asset {assetId}")
                 cdm.token_refresh()
+                header = cdm.api_header()
                 url = (pxc_url_customers + "/" +
                        customerId +
                        pxc_url_crash_risk_assets + "/" + assetUniqueId +
@@ -5320,6 +5343,7 @@ def pxc_similar_assets():
             assetUniqueId = row["assetUniqueId"]
             if not row["successTrackId"] == "N/A":
                 cdm.token_refresh()
+                header = cdm.api_header()
                 for feature in features:
                     url = (pxc_url_customers + "/" +
                            customerId +
@@ -5426,6 +5450,7 @@ def pxc_crash_in_last():
             for daysLastCrashed in timePeriods:
                 if not row["successTrackId"] == "N/A":
                     cdm.token_refresh()
+                    header = cdm.api_header()
                     print(f"\nScanning Serial Number {serialNumber} with a last crashed date within {daysLastCrashed} "
                           f"days for {customerName} ")
                     url = (pxc_url_customers + "/" +
@@ -5524,6 +5549,7 @@ def pxc_asset_crash_history():
             assetId = row["assetId"]
             if not row["successTrackId"] == "N/A":
                 cdm.token_refresh()
+                header = cdm.api_header()
                 print(f"\nScanning Asset ID:{assetId} for {customerName} on Success Track{successTrackId}")
                 url = (pxc_url_customers + "/" +
                        customerId +
