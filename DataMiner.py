@@ -164,6 +164,9 @@ Version Features and enhancements
 12. Fixed bug with Lifecycle func not producing JSON output
 
 """
+# adding Cisco DataMiner Folder to system path
+import sys
+
 import concurrent.futures
 from requests.exceptions import Timeout
 import random
@@ -182,6 +185,8 @@ from botocore.exceptions import ClientError
 from botocore.exceptions import NoCredentialsError
 from datetime import datetime
 import logging
+import argparse
+from configparser import ConfigParser
 
 '''
 Notes on Imports
@@ -242,12 +247,15 @@ pxc_url_crash_risk_assets_last_crashed = pxc_url_crash_risk + 'sCrashed'
 pxc_url_crash_risk_asset_crash_history = '/crashHistory'
 
 # Data File Variables
-codeVersion = str('2.0.0')
-configFile = 'config.ini'
-csv_output_dir = 'outputcsv/'
-json_output_dir = 'outputjson/'
-log_output_dir = 'outputlog/'
-temp_dir = 'temp/'
+codeVersion = str("2.0.0-d")
+configFile = "config.ini"
+
+csv_output_dir = "outputcsv/"
+json_output_dir = "outputjson/"
+log_output_dir = "outputlog/"
+temp_dir = "temp/"
+
+# Variables
 allCustomers = (csv_output_dir + 'All_Customers.csv')
 customers = (csv_output_dir + 'Customers.csv')
 contracts = (csv_output_dir + 'Contracts.csv')
@@ -335,7 +343,39 @@ insightList = []  # list of Success Track ID which support Insights (38396885, 4
 Begin defining functions
 =======================================================================
 '''
+def init_logger(log_level):
+    # Check if the specified log level is valid
+    #   CRITICAL: Indicates a very serious error, typically leading to program termination.
+    #   ERROR:    Indicates an error that caused the program to fail to perform a specific function.
+    #   WARNING:  Indicates a warning that something unexpected happened
+    #   INFO:     Provides confirmation that things are working as expected
+    #   DEBUG:    Provides info useful for diagnosing problems
+    if log_level not in ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"):
+        print("Invalid log level. Please use one of: DEBUG, INFO, WARNING, ERROR, CRITICAL")
+        sys.exit(1)
 
+    if log_to_file == 1:
+        print('Logging is enabled\n')
+        # Setup log storage - incase needed
+        if os.path.isdir(log_output_dir):
+            shutil.rmtree(log_output_dir)
+            os.mkdir(log_output_dir)
+        else:
+            os.mkdir(log_output_dir)
+
+        # Set up logging based on the parsed log level
+        logging.basicConfig(filename=log_output_dir + 'PCX.log', level=log_level,
+                            format='%(levelname)s:%(funcName)s: %(message)s')
+    else:
+        print('Logging is disabled\n')
+
+
+# Function explain usage
+def usage():
+    print(f"Usage: python3 {sys.argv[0]} <customer> -log=<LOG_LEVEL>")
+    print(f"Args:")
+    print(f"   Optional named section for customer auth credentials.\n")
+    sys.exit()
 
 def token_time_check():
     # Check Token lifespan and if older than 110 mins, generate a new one.
@@ -345,7 +385,6 @@ def token_time_check():
         logging.debug(f'Token time is :{tokenTime} minutes')
     if tokenTime > 110:
         get_pxc_token()
-
 
 def location_ready_status(location, headers, report):
     # query the API for a ready status to collect the report data
@@ -386,8 +425,8 @@ def get_dir_size(path='.'):
     return total
 
 
-def load_config():
-    # Function to load configuration from config.ini and continue or create a template if not found and exit
+# Function to load configuration from config.ini and continue or create a template if not found and exit
+def load_config(customer):
     global pxc_client_id
     global pxc_client_secret
     global s3access_key
@@ -408,15 +447,32 @@ def load_config():
 
     config = ConfigParser()
     if os.path.isfile(configFile):
-        print('********************** CISCO PX Cloud Data Miner *********************')
-        print('Config.ini file was found, continuing...')
+        print(f'********************** CISCO PX Cloud Data Miner *********************')
+        print(f'********************* Minning Data for {customer} ********************')
+        print(f"**********************************************************************\n")
+        print(f"Config.ini file was found, continuing...")
         config.read(configFile)
-        pxc_client_id = (config['credentials']['pxc_client_id'])
-        pxc_client_secret = (config['credentials']['pxc_client_secret'])
-        s3access_key = (config['credentials']['s3access_key'])
-        s3access_secret = (config['credentials']['s3access_secret'])
-        s3bucket_folder = (config['credentials']['s3bucket_folder'])
-        s3bucket_name = (config['credentials']['s3bucket_name'])
+
+        # customer name cant be 'settings'
+        if customer == 'settings':
+            print(f"\nError: Customer name name can not be the resertved string 'settings'")
+            usage()
+
+        # check to see if credentials exist for a named customer.
+        # default customer config is 'credentials'
+        if not customer in config:
+            print(f"\nError: Credentials for Customer {customer} not found in config.ini")
+            usage()
+
+        # [credentials]
+        pxc_client_id = (config[customer]['pxc_client_id'])
+        pxc_client_secret = (config[customer]['pxc_client_secret'])
+        s3access_key = (config[customer]['s3access_key'])
+        s3access_secret = (config[customer]['s3access_secret'])
+        s3bucket_folder = (config[customer]['s3bucket_folder'])
+        s3bucket_name = (config[customer]['s3bucket_name'])
+
+        # [settings]
         wait_time = int((config['settings']['wait_time']))
         pxc_fault_days = str((config['settings']['pxc_fault_days']))
         max_items = (config['settings']['max_items'])
@@ -6196,6 +6252,7 @@ def main():
         if outputFormat == 3:
             print('Saving data in CSV format')
         temp_storage()  # delete temp and output directories and recreate before every run
+
         get_pxc_token()  # call the function to get a valid PX Cloud API token
         get_pxc_customers()  # No requirements but all others require it
         get_pxc_contracts()  # requires get_pxc_customers
@@ -6252,18 +6309,25 @@ def main():
         logging.debug(f'Stop Time:{datetime.now()}')
         print(f'Total Time:{math.ceil(int(stopTime - startTime) / 60)} minutes')
         logging.debug(f'Total Time:{math.ceil(int(stopTime - startTime) / 60)} minutes')
-        # copy multiple tests in different folders under 'Collection Results #'
-        collectionResultsDir = 'Collection Results ' + str(x + 1) + '/'
-        if os.path.isdir(collectionResultsDir):
-            shutil.rmtree(collectionResultsDir)
-        if outputFormat == 1 or outputFormat == 2:
-            print(f'Total bytes collected for JSONs: {get_dir_size(json_output_dir)}')
-            logging.info(f'Total bytes collected for JSONs: {get_dir_size(json_output_dir)}')
-            shutil.move(json_output_dir, collectionResultsDir + json_output_dir)
-        if outputFormat == 1 or outputFormat == 3:
-            print(f'Total bytes collected for CSVs : {get_dir_size(csv_output_dir)}')
-            logging.info(f'Total bytes collected for CSVs : {get_dir_size(csv_output_dir)}')
-            shutil.move(csv_output_dir, collectionResultsDir + csv_output_dir)
+
+        # copy multiple tests in different folders under 'Results-#'
+        if testLoop > 1:
+            collectionResultsDir = 'Results-' + str(x + 1) + '/'
+            if os.path.isdir(collectionResultsDir):
+                shutil.rmtree(collectionResultsDir)
+
+            # Save all output files
+            shutil.move(log_output_dir, collectionResultsDir + log_output_dir)
+            if outputFormat == 1 or outputFormat == 2:
+                print(f'Total bytes collected for JSONs: {get_dir_size(json_output_dir)}')
+                logging.info(f'Total bytes collected for JSONs: {get_dir_size(json_output_dir)}')
+                shutil.move(json_output_dir, collectionResultsDir + json_output_dir)
+            if outputFormat == 1 or outputFormat == 3:
+                print(f'Total bytes collected for CSVs : {get_dir_size(csv_output_dir)}')
+                logging.info(f'Total bytes collected for CSVs : {get_dir_size(csv_output_dir)}')
+                shutil.move(csv_output_dir, collectionResultsDir + csv_output_dir)
+        #end if 
+
         if x + 1 == testLoop:
             # Clean exit
             if outputFormat == 2:
@@ -6277,20 +6341,32 @@ def main():
 
 
 if __name__ == '__main__':
+    # setup parser
+    parser = argparse.ArgumentParser(description="Your script description.")
+    parser.add_argument("customer", nargs='?', default='credentials', help="Customer name")
+    parser.add_argument("-log", "--log-level", default="DEBUG", help="Set the logging level (default: ERROR)")
+
+    # Parse command-line arguments
+    args = parser.parse_args()
+
     # call function to load config.ini data into variables
-    load_config()
-    # clear log folder before the script runs if logging is enabled
-    if log_to_file == 1:
-        print('Logging is enabled\n')
-        if os.path.isdir(log_output_dir):
-            shutil.rmtree(log_output_dir)
-            os.mkdir(log_output_dir)
-        else:
-            os.mkdir(log_output_dir)
-        logging.basicConfig(filename=log_output_dir + 'PXCLoud.log', level=logging.DEBUG,
-                            format='%(asctime)s:%(levelname)s:%(funcName)s:%(message)s')
-    else:
-        print('Logging is disabled\n')
+    customer = args.customer
+    if not customer:
+        usage()
+
+    # create a per-customer folder for saving data
+    load_config(customer)
+    if customer:
+        # Create the customers directory
+        os.makedirs(customer, exist_ok=True)
+        # Change into the directory
+        os.chdir(customer)
+
+    # delete temp and output directories and recreate before every run
+    temp_storage()  # delete temp and output directories and recreate before every run
+
+    # setup the logging level
+    init_logger(args.log_level.upper())
 
     # Set URL to Sandbox if useProductionURL is false
     if useProductionURL == 0:
