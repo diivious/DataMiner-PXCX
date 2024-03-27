@@ -581,6 +581,14 @@ def temp_storage():
     else:
         os.mkdir(temp_dir)
 
+def get_pxc_offset(page, max_items):
+    offset = ''
+    off_set = (page * int(max_items))
+    if off_set > 0:
+        offset = f'offset={off_set}&'
+    logging.debug(f'off-set is {off_set} and max is {max_items}')
+    return offset
+
 
 def get_pxc_token():
     global token
@@ -756,9 +764,8 @@ def get_pxc_customers():
         writer = csv.writer(target, delimiter=' ', quotechar=' ', quoting=csv.QUOTE_NONE)
         writer.writerow(CSV_Header.split())
     while page < pages:
-        off_set = (page * int(max_items))
-        logging.debug(f'off-set is {off_set} and max is {max_items}')
-        url = f'{pxc_url_customers}?offset={off_set}&max={max_items}'
+        offset = get_pxc_offset(page, max_items)
+        url = f'{pxc_url_customers}?{offset}max={max_items}'
         items = (get_json_reply(url, tag='items', report='Customer Report'))
         page += 1
         for item in items:
@@ -833,8 +840,8 @@ def get_pxc_contracts():
         writer = csv.writer(target, delimiter=' ', quotechar=' ', quoting=csv.QUOTE_NONE)
         writer.writerow(CSV_Header.split())
         while page < pages:
-            off_set = (page * int(max_items))
-            url = f'{pxc_url_contracts}?offset={off_set}&max={max_items}'
+            offset = get_pxc_offset(page, max_items)
+            url = f'{pxc_url_contracts}?{offset}max={max_items}'
             items = (get_json_reply(url, tag='items', report='Contract Report'))
             page += 1
             if items is not None:
@@ -936,8 +943,8 @@ def get_pxc_contractswithcustomernames():
             writer = csv.writer(target, delimiter=' ', quotechar=' ', quoting=csv.QUOTE_NONE)
             writer.writerow(CSV_Header.split())
             while page < pages:
-                off_set = (page * int(max_items))
-                url = f'{pxc_url_contractswithcustomers}?offset={off_set}&max={max_items}'
+                offset = get_pxc_offset(page, max_items)
+                url = f'{pxc_url_contractswithcustomers}?{offset}max={max_items}'
                 items = (get_json_reply(url, tag='items', report='Contract With Customer Names Report'))
                 page += 1
                 if items is not None:
@@ -1174,9 +1181,9 @@ def get_pxc_contracts_details_part1():
                 logging.debug(f'Response Body:{response.content}')
                 page = 0
                 while page < pages:
-                    off_set = (page * int(max_items))
+                    offset = get_pxc_offset(page, max_items)
                     url = f'{pxc_url_contracts_details}?contractNumber={contractNumber}' \
-                          f'&offset={off_set}&max={max_items}'
+                          f'&{offset}max={max_items}'
                     items = (get_json_reply(url, tag='items', report='Contract Details Report'))
                     if items:
                         if outputFormat == 1 or outputFormat == 2:
@@ -1324,9 +1331,9 @@ def get_pxc_contracts_details_part2():
                 logging.debug(f'Response Body:{response.content}')
                 page = 0
                 while page < pages:
-                    off_set = (page * int(max_items))
+                    offset = get_pxc_offset(page, max_items)
                     url = f'{pxc_url_contracts_details}?contractNumber={contractNumber}' \
-                          f'&offset={off_set}&max={max_items}'
+                          f'&{offset}max={max_items}'
                     items = (get_json_reply(url, tag='items', report='Contract Details Report'))
                     if items:
                         if outputFormat == 1 or outputFormat == 2:
@@ -1474,9 +1481,9 @@ def get_pxc_contracts_details_part3():
                 logging.debug(f'Response Body:{response.content}')
                 page = 0
                 while page < pages:
-                    off_set = (page * int(max_items))
+                    offset = get_pxc_offset(page, max_items)
                     url = f'{pxc_url_contracts_details}?contractNumber={contractNumber}' \
-                          f'&offset={off_set}&max={max_items}'
+                          f'&{offset}max={max_items}'
                     items = (get_json_reply(url, tag='items', report='Contract Details Report'))
                     if items:
                         if outputFormat == 1 or outputFormat == 2:
@@ -3916,7 +3923,7 @@ def pxc_software_groups():
             if successTrackId in insightList:
                 logging.debug(f'Scanning {customerName}')
                 url = f'{pxc_url_customers}{customerId}{pxc_url_software_groups}' \
-                      f'?offset=0&max={max_items}&successTrackId={successTrackId}'
+                      f'?max={max_items}&successTrackId={successTrackId}'
                 items = (get_json_reply(url, tag='items', report='Software Groups Report'))
                 if items is not None:
                     if outputFormat == 1 or outputFormat == 2:
@@ -4548,7 +4555,7 @@ def pxc_software_group_suggestions_field_notices():
                           f'on Success Track {successTrackId}')
             if row['successTrackId'] in insightList:
                 token_time_check()
-                url = f'{pxc_url_customers}{customerId}{pxc_url_software_group_suggestions_field_notices}?offset=0' \
+                url = f'{pxc_url_customers}{customerId}{pxc_url_software_group_suggestions_field_notices}?' \
                       f'&max={max_items}&machineSuggestionId={machineSuggestionId}&successTrackId={successTrackId}'
                 max_SWGroupSuggestionsFieldNotices_attempts = 10
                 SWGroupSuggestionsFieldNotices_attempts = 0
