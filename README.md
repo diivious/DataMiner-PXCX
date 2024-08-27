@@ -1,9 +1,9 @@
 # DataMiner
 This is a Fork of [CiscoSteve/DataMiner](https://github.com/CiscoSteve/DataMiner)
 
-Primary changes from Cisco Verson:
+Primary changes from Cisco Version:
   1) Some edits/changes I wish to keep track of
-  2) Additon of gitignore to avoid tracking temp files
+  2) Addition of gitignore to avoid tracking temp files
   3) Deleted all the zips in favor of release branch
 
 #
@@ -16,8 +16,7 @@ It will gather the JSON data and convert it to CSV or JSON files, or both for in
 $ python3 .\DataMiner.py <Auth Section>
      <Auth Section> auth section in config.in - default is credentials  (optional)
 
-
-To excute the script with the default auth secion [credentials] enter the command line
+To execute the script with the default auth section [credentials] enter the command line
    python3 .\DataMiner.py
 
 If you wish to have multiple auth sections, add named sections to the config.ini 
@@ -39,9 +38,8 @@ Example:
 	s3bucket_folder = 
 	s3bucket_name = 
 
-
 In this case you have two auth sections - the default and one named DVS.
-To use the nameed auth section you enter:
+To use the named auth section you enter:
    python3 .\DataMiner.py DVS
 
 

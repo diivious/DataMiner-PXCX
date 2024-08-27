@@ -213,12 +213,13 @@ logging for writing the log files via Python logger
 # Generic URL Variables
 pxc_token_url = 'https://id.cisco.com/oauth2/aus1o4emxorc3wkEe5d7/v1/token'
 urlProtocol = 'https://'
+pxc_cache_control = 'no-cache'
 pxc_url_base = ''
+pxc_api_retry = 10
 urlHost = 'api-cx.cisco.com/'
 urlLink = 'px/v1/'
 urlLinkSandbox = 'sandbox/px/v1/'
 grant_type = 'client_credentials'
-pxc_cache_control = 'no-cache'
 environment = ''
 
 # Customer and Analytics Insights URL Variables
@@ -246,8 +247,13 @@ pxc_url_crash_risk_similar_assets = '/similarAssets'
 pxc_url_crash_risk_assets_last_crashed = pxc_url_crash_risk + 'sCrashed'
 pxc_url_crash_risk_asset_crash_history = '/crashHistory'
 
+# Variables
+features = ['features', 'fingerprint', 'softwares_features']
+timePeriods = [1, 7, 15, 90]
+cpu_threads = 0
+
 # Data File Variables
-codeVersion = str("2.0.0-d")
+codeVersion = str("2.1.1-d")
 configFile = "config.ini"
 
 csv_output_dir = "outputcsv/"
@@ -255,10 +261,11 @@ json_output_dir = "outputjson/"
 log_output_dir = "outputlog/"
 temp_dir = "temp/"
 
-# Variables
+# CSV FileNames
 allCustomers = (csv_output_dir + 'All_Customers.csv')
 customers = (csv_output_dir + 'Customers.csv')
 contracts = (csv_output_dir + 'Contracts.csv')
+unique_contracts = (csv_output_dir + 'Unique_Contracts.csv')
 contractsWithCustomers = (csv_output_dir + 'Contracts_With_Customer_Names.csv')
 L2_contracts = (csv_output_dir + 'L2_contracts.csv')
 OSV_AFM_List = (csv_output_dir + 'OSV_AFM_List.csv')
@@ -299,8 +306,6 @@ CrashRiskFactors = (csv_output_dir + 'Crash_Risk_Factors.csv')
 CrashRiskSimilarAssets = (csv_output_dir + 'Crash_Risk_Similar_Assets.csv')
 CrashRiskAssetsLastCrashed = (csv_output_dir + 'Crash_Risk_Assets_Last_Crashed.csv')
 CrashRiskAssetCrashHistory = (csv_output_dir + 'Crash_Risk_Asset_Crash_History.csv')
-features = ['features', 'fingerprint', 'softwares_features']
-timePeriods = [1, 7, 15, 90]
 
 # Configuration File Variables
 pxc_client_id = ''  # Used to store the PX Cloud Client ID
@@ -403,6 +408,7 @@ def location_ready_status(location, headers, report):
             time.sleep(pause)
         except Timeout:
             logging.debug(f'Time out error getting token')
+    logging.debug(f'Obtrained {report} Report location at:{location}')
     return location
 
 
@@ -448,8 +454,6 @@ def load_config(customer):
     config = ConfigParser()
     if os.path.isfile(configFile):
         print(f'********************** CISCO PX Cloud Data Miner *********************')
-        print(f'********************* Minning Data for {customer} ********************')
-        print(f"**********************************************************************\n")
         print(f"Config.ini file was found, continuing...")
         config.read(configFile)
 
@@ -467,6 +471,13 @@ def load_config(customer):
         # [credentials]
         pxc_client_id = (config[customer]['pxc_client_id'])
         pxc_client_secret = (config[customer]['pxc_client_secret'])
+        if '#' in pxc_client_id:
+            print(f"\nError: Clent ID for Customer {customer} not found in config.ini")
+            usage()
+        if '#' in pxc_client_secret:
+            print(f"\nError: Client Secret for Customer {customer} not found in config.ini")
+            usage()
+
         s3access_key = (config[customer]['s3access_key'])
         s3access_secret = (config[customer]['s3access_secret'])
         s3bucket_folder = (config[customer]['s3bucket_folder'])
@@ -604,7 +615,7 @@ def get_pxc_token():
     )
     headers = {'Content-type': 'application/x-www-form-urlencoded'}
     # Make a request to API
-    for i in range(10):
+    for i in range(pxc_api_retry):
         i += 1
         logging.debug(f'attempt number {i} for Token Request')
         try:
@@ -651,7 +662,7 @@ def get_json_reply(url, tag, report):
             logging.debug(f'Querying data for {report}')
             while reply_attempts < max_reply_attempts:
                 # Make a request to API
-                for i in range(10):
+                for i in range(pxc_api_retry):
                     i += 1
                     logging.debug(f'Request attempt number {i}')
                     try:
@@ -766,6 +777,7 @@ def get_pxc_customers():
     while page < pages:
         offset = get_pxc_offset(page, max_items)
         url = f'{pxc_url_customers}?{offset}max={max_items}'
+        logging.debug(f'off-set is {offset} and max is {max_items}')
         items = (get_json_reply(url, tag='items', report='Customer Report'))
         page += 1
         for item in items:
@@ -826,9 +838,12 @@ def get_pxc_contracts():
     logging.debug('********************** Running Contract Report ***********************\n')
     global contractsFlag
     contractsFlag = 0
+    logging.debug(f'Waiting on Customer List to finish')
     while customersFlag == 0:
         logging.debug(f'Waiting on Customer List to finish')
         time.sleep(1)
+    logging.debug(f'Customer List to finished')
+
     print('Started Running Contract Report')
     totalCount = (get_json_reply(url=f'{pxc_url_contracts}?max={max_items}',
                                  tag='totalCount', report='Contract Report'))
@@ -848,21 +863,9 @@ def get_pxc_contracts():
                 for item in items:
                     if item['onboardedstatus']:
                         contractNumber = str(item['contractNumber'])
-                        try:
-                            cuid = str(item['cuid'])
-                        except KeyError:
-                            cuid = 'N/A'
-                            pass
-                        try:
-                            cavid = str(item['cavid'])
-                        except KeyError:
-                            cavid = 'N/A'
-                            pass
-                        try:
-                            customerNameTemp = str(item['customerName'].replace('"', ','))
-                        except KeyError:
-                            customerNameTemp = 'N/A'
-                            pass
+                        cuid = str(item.get('cuid', 'N/A'))
+                        cavid = str(item.get('cavid', 'N/A'))
+                        customerNameTemp = str(item.get('customerName', 'N/A').replace('"', ','))
                         contractStatus = str(item['contractStatus'])
                         if str(item['contractValue']) == 'None':
                             contractValue = '0.00'
@@ -891,8 +894,9 @@ def get_pxc_contracts():
                             json.dump(items, json_file)
                             logging.debug(f'Saving {json_file.name}')
     logging.debug('Extracting Unique Contract Entries')
+
     # Remove duplicate contract IDs from contract list and store in unique_contracts.csv
-    with open(contracts, 'r') as infile, open(csv_output_dir + 'unique_contracts.csv', 'a', newline='') as outfile:
+    with open(contracts, 'r') as infile, open(unique_contracts, 'a', newline='') as outfile:
         # this list will hold unique contracts numbers,
         contractNumbers = []
         numOfDups = 0
@@ -955,28 +959,15 @@ def get_pxc_contractswithcustomernames():
                         customerId = str(customerDetails[0]['customerId'])
                         contractNumber = str(item['contractNumber'])
                         contractStatus = str(item['contractStatus'])
-                        try:
-                            contractValue = str(item['contractValue'])
-                        except KeyError:
-                            contractValue = ''
-                        try:
-                            customerGUName = str(customerDetails[0]['customerGUName'].replace('?', ' '))
-                        except KeyError:
-                            customerGUName = customerName
-                        try:
-                            serviceLevel = str(item['serviceLevel'].replace(',', '|'))
-                        except KeyError:
-                            serviceLevel = ''
-                        coverageStartDate = str(item['coverageStartDate'])
-                        coverageEndDate = str(item['coverageEndDate'])
-                        try:
-                            onboardedstatus = str(item['onboardedStatus'])
-                        except KeyError:
-                            onboardedstatus = str(item['onboardedstatus'])
-                        try:
-                            successTrackIds = (item['successTrackIds'])
-                        except KeyError:
-                            successTrackIds = ''
+
+                        contractValue = str(item.get('contractValue', ''))
+                        customerGUName = str(customerDetails[0].get('customerGUName', customerName).replace('?', ' '))
+                        serviceLevel = str(item.get('serviceLevel', '').replace(',', '|'))
+                        coverageStartDate = str(item.get('coverageStartDate', ''))
+                        coverageEndDate = str(item.get('coverageEndDate', ''))
+                        onboardedstatus = str(item.get('onboardedStatus', item.get('onboardedstatus', '')))
+                        successTrackIds = item.get('successTrackIds', '')
+                       
                         for successTrackId in successTrackIds:
                             logging.debug(f'Found contract number {contractNumber} for {customerGUName}')
                             CSV_Data = f'{customerName},{customerId},{contractNumber},{contractStatus},' \
@@ -1060,7 +1051,7 @@ def split_csv(source_filepath, dest_folder, split_file_prefix, records_per_file)
     with open(source_filepath, 'r') as source:
         reader = csv.reader(source)
         headers = next(reader)
-        file_idx = 0
+        file_idx = 1
         records_exist = True
         while records_exist:
             i = 0
@@ -1083,11 +1074,182 @@ def split_csv(source_filepath, dest_folder, split_file_prefix, records_per_file)
             file_idx += 1
 
 
-def csv_count_rows(file, chunks):
-    with open(file) as f:
+def split_contract_detail_file(chunks):
+    with open(unique_contracts) as f:
         nb_lines = sum(1 for _ in f)
-    row_limit = round(nb_lines / chunks)
-    split_csv(file, 'temp/', 'split', row_limit)
+    row_limit = round(nb_lines / (chunks+1))
+
+    split_csv(unique_contracts, 'temp/', 'split', row_limit)
+    logging.debug(f'Splitting Contracts:: Lines:{nb_lines} Chunks:{chunks} Limmit:{row_limit}')
+
+
+def merge_contract_detail_chunks(chunks, merged_file):
+    outputFile = csv.writer(open(merged_file,  'w', encoding='utf-8', newline=''))
+    firstfile = True
+
+    for chunk in range(chunks):
+        contract_filename = f'temp/CD_{chunk}.csv'
+        with open(contract_filename, 'r') as rawfile:
+            reader = csv.reader(rawfile)
+            for idx, row in enumerate(reader):
+                if idx == 0 and not firstfile:
+                    continue
+                outputFile.writerow(row)
+        firstfile = False
+
+
+def get_pxc_contracts_details(chunk):
+    # Function to get the Contract List from PX Cloud
+    # This API will fetch list of partner contract line items transacted with Cisco.
+    # CSV Naming Convention: Contract_Details.csv
+    # JSON Naming Convention: {Customer Name}_Contract_Details_{ContractNumber}_Page_{page}_of_{total}.json
+    logging.debug(f'********************** Running Contract Details Part {chunk} **********************\n')
+    
+    contract_filename = f'temp/CD_{chunk}.csv'
+    split_filename    = f'temp/split_{chunk}.csv'
+
+    tRecords = 0
+    while contractsFlag == 0:
+        logging.debug(f'Waiting on Contracts List to finish')
+        time.sleep(1)
+
+    print(f'Started Running Contract Details Report Part {chunk}')
+    token_time_check()
+    if outputFormat == 1 or outputFormat == 3:
+        with open(contract_filename, 'w', encoding='utf-8', newline='') as target:
+            CSV_Header = 'customerName,customerGUName,customerHQName,contractNumber,productId,serialNumber,' \
+                         'contractStatus,componentType,serviceLevel,coverageStartDate,coverageEndDate,' \
+                         'installationQuantity,instanceNumber'
+            writer = csv.writer(target, delimiter=' ', quotechar=' ', quoting=csv.QUOTE_NONE)
+            writer.writerow(CSV_Header.split())
+
+    with open(split_filename, 'r') as target:
+        contractList = csv.DictReader(target)
+        for row in contractList:
+            customerName = row['customerName'].replace(',', ' ')
+            contractNumber = row['contractNumber']
+            print(f'Collecting contract details for {customerName} on contract {contractNumber}')
+            headers = {'Authorization': f'Bearer {token}', 'Content-Type': 'application/json'}
+            url = f'{pxc_url_contracts_details}?contractNumber={contractNumber}'
+            logging.debug(f'Scanning {customerName} for contract Number: {contractNumber}')
+            max_contractDetails_attempts = 10
+            contractDetails_attempts = 0
+            while contractDetails_attempts < max_contractDetails_attempts:
+                # Make a request to API
+                for i in range(pxc_api_retry):
+                    i += 1
+                    logging.debug(f'Request attempt number {i}')
+                    try:
+                        response = requests.request('GET', url, headers=headers, data=data_payload,
+                                                    verify=True, timeout=apiTimeout)
+                        if i > 1:
+                            logging.debug(f'API request retry # {i} was successful')
+                        break
+                    except Timeout:
+                        logging.debug(f'Time out error getting resonse')
+                # If not rate limited, break out of while loop and continue
+                if response.status_code != 429:
+                    logging.debug(f'Querying:')
+                    logging.debug(f'URL Request: {url}')
+                    logging.debug(f'Request Body: {data_payload}')
+                    logging.debug(f'HTTP Code:{response.status_code}')
+                    logging.debug(f'Review API Headers:{response.headers}')
+                    logging.debug(f'Response Body:{response.content}')
+                    if contractDetails_attempts == 0:
+                        logging.debug('Success')
+                    break
+                # If rate limited, wait and try again
+                logging.debug('Rate Limit Exceeded for Contract Details Report! Retrying...')
+                logging.debug(f'URL Request: {url}')
+                logging.debug(f'Request Body: {data_payload}')
+                logging.debug(f'HTTP Code:{response.status_code}')
+                logging.debug(f'Review API Headers:{response.headers}')
+                logging.debug(f'Response Body:{response.content}')
+                contractDetails_attempts += 1
+                pause = random.random()
+                logging.debug(f'sleeping for {pause} seconds')
+                time.sleep(pause)
+            if contractDetails_attempts > 0:
+                logging.debug(f'Retry was successful for Contract Details Report')
+                logging.debug(f'URL Request: {url}')
+                logging.debug(f'Request Body: {data_payload}')
+                logging.debug(f'HTTP Code:{response.status_code}')
+                logging.debug(f'Review API Headers:{response.headers}')
+                logging.debug(f'Response Body:{response.content}')
+            reply = json.loads(response.text)
+            logging.debug(f'Reply from API is : {reply['items']}')
+            logging.debug(f'Total Records  : {reply['totalCount']}')
+            logging.debug(f'URL Request: {url}')
+            logging.debug(f'Request Body: {data_payload}')
+            logging.debug(f'HTTP Code:{response.status_code}')
+            logging.debug(f'Review API Headers:{response.headers}')
+            logging.debug(f'Response Body:{response.content}')
+            totalCount = reply['totalCount']
+            if totalCount > 0:
+                logging.debug(f'Details found for contract {contractNumber}')
+                pages = math.ceil(totalCount / int(max_items))
+                logging.debug(f'Total Pages: {pages}')
+                logging.debug(f'Total Records: {totalCount}')
+                logging.debug(f'URL Request: {url}')
+                logging.debug(f'Request Body: {data_payload}')
+                logging.debug(f'HTTP Code:{response.status_code}')
+                logging.debug(f'Review API Headers:{response.headers}')
+                logging.debug(f'Response Body:{response.content}')
+                page = 0
+                while page < pages:
+                    offset = get_pxc_offset(page, max_items)
+                    url = f'{pxc_url_contracts_details}?contractNumber={contractNumber}' \
+                          f'&{offset}max={max_items}'
+                    items = (get_json_reply(url, tag='items', report='Contract Details Report'))
+                    if items:
+                        if outputFormat == 1 or outputFormat == 2:
+                            if items is not None:
+                                if len(items) > 0:
+                                    json_file = (json_output_dir + customerName.replace('/', '-') +
+                                                 '_Contract_Details_' + contractNumber +
+                                                 '_Page_' + str(page + 1) +
+                                                 '_of_' + str(pages) +
+                                                 '.json')
+                                    if not os.path.isfile(json_file):
+                                        with open(json_file, 'w') as fileTarget:
+                                            json.dump(items, fileTarget)
+                                            logging.debug(f'Saving {json_file}')
+                                    else:
+                                        logging.debug('Duplcates found and being ignored...')
+                        if outputFormat == 1 or outputFormat == 3:
+                            if items is not None:
+                                if len(items) > 0:
+                                    for item in items:
+                                        customerGUName = str(item['customerGUName'].replace(',', ' '))
+                                        customerHQName = str(item['customerHQName'].replace(',', ' '))
+                                        productId = str(item['productId'].replace(',', ' '))
+                                        serialNumber = str(item.get('serialNumber', 'N/A'))
+                                        contractStatus = str(item['contractStatus'])
+                                        componentType = str(item['componentType'].replace(',', ' '))
+                                        serviceLevel = str(item['serviceLevel'].replace(',', ' '))
+                                        coverageStartDate = str(item['coverageStartDate'])
+                                        coverageEndDate = str(item['coverageEndDate'])
+                                        installationQuantity = str(item['installationQuantity'])
+                                        instanceNumber = str(item['instanceNumber'])
+                                        with open(contract_filename, 'a', encoding='utf-8', newline='') \
+                                                as details_target:
+                                            writer = csv.writer(details_target,
+                                                                delimiter=' ',
+                                                                quotechar=' ',
+                                                                quoting=csv.QUOTE_MINIMAL)
+                                            CSV_Data = f'{customerName},{customerGUName},{customerHQName},' \
+                                                       f'{contractNumber},{productId},{serialNumber},' \
+                                                       f'{contractStatus},{componentType},{serviceLevel},' \
+                                                       f'{coverageStartDate},{coverageEndDate},' \
+                                                       f'{installationQuantity},{instanceNumber}'
+                                            writer.writerow(CSV_Data.split())
+                                            tRecords += 1
+                    page += 1
+                logging.debug(f'Collected Details for contract number {contractNumber}')
+            else:
+                logging.debug(f'No details found for contract number {contractNumber}')
+    print(f'Total Contract Details records for Part {chunk} {tRecords}')
+    logging.debug(f'Total Contract Details records for Part {chunk} {tRecords}')
 
 
 def get_pxc_contracts_details_part1():
@@ -1103,18 +1265,18 @@ def get_pxc_contracts_details_part1():
     print('Started Running Contract Details Report Part 1')
     token_time_check()
     if outputFormat == 1 or outputFormat == 3:
-        with open('temp/CD_0.csv', 'w', encoding='utf-8', newline='') as target:
+        with open(file1, 'w', encoding='utf-8', newline='') as target:
             CSV_Header = 'customerName,customerGUName,customerHQName,contractNumber,productId,serialNumber,' \
                          'contractStatus,componentType,serviceLevel,coverageStartDate,coverageEndDate,' \
                          'installationQuantity,instanceNumber'
             writer = csv.writer(target, delimiter=' ', quotechar=' ', quoting=csv.QUOTE_NONE)
             writer.writerow(CSV_Header.split())
-    with open('temp/split_0.csv', 'r') as target:
+    with open('temp/split_1.csv', 'r') as target:
         contractList = csv.DictReader(target)
         for row in contractList:
             customerName = row['customerName'].replace(',', ' ')
             contractNumber = row['contractNumber']
-            logging.debug(f'Collecting contract details for {customerName}')
+            print(f'Collecting contract details for {customerName} on contract {contractNumber}')
             headers = {'Authorization': f'Bearer {token}', 'Content-Type': 'application/json'}
             url = f'{pxc_url_contracts_details}?contractNumber={contractNumber}'
             logging.debug(f'Scanning {customerName} for contract Number: {contractNumber}')
@@ -1122,7 +1284,7 @@ def get_pxc_contracts_details_part1():
             contractDetailsPart1_attempts = 0
             while contractDetailsPart1_attempts < max_contractDetailsPart1_attempts:
                 # Make a request to API
-                for i in range(10):
+                for i in range(pxc_api_retry):
                     i += 1
                     logging.debug(f'Request attempt number {i}')
                     try:
@@ -1163,6 +1325,8 @@ def get_pxc_contracts_details_part1():
                 logging.debug(f'Review API Headers:{response.headers}')
                 logging.debug(f'Response Body:{response.content}')
             reply = json.loads(response.text)
+            logging.debug(f'Reply from API is : {reply['items']}')
+            logging.debug(f'Total Records  : {reply['totalCount']}')
             logging.debug(f'URL Request: {url}')
             logging.debug(f'Request Body: {data_payload}')
             logging.debug(f'HTTP Code:{response.status_code}')
@@ -1207,11 +1371,7 @@ def get_pxc_contracts_details_part1():
                                         customerGUName = str(item['customerGUName'].replace(',', ' '))
                                         customerHQName = str(item['customerHQName'].replace(',', ' '))
                                         productId = str(item['productId'].replace(',', ' '))
-                                        try:
-                                            serialNumber = str(item['serialNumber'])
-                                        except KeyError:
-                                            serialNumber = 'N/A'
-                                            pass
+                                        serialNumber = str(item.get('serialNumber', 'N/A'))
                                         contractStatus = str(item['contractStatus'])
                                         componentType = str(item['componentType'].replace(',', ' '))
                                         serviceLevel = str(item['serviceLevel'].replace(',', ' '))
@@ -1219,7 +1379,7 @@ def get_pxc_contracts_details_part1():
                                         coverageEndDate = str(item['coverageEndDate'])
                                         installationQuantity = str(item['installationQuantity'])
                                         instanceNumber = str(item['instanceNumber'])
-                                        with open('temp/CD_0.csv', 'a', encoding='utf-8', newline='') \
+                                        with open(file1, 'a', encoding='utf-8', newline='') \
                                                 as details_target:
                                             writer = csv.writer(details_target,
                                                                 delimiter=' ',
@@ -1238,319 +1398,6 @@ def get_pxc_contracts_details_part1():
                 logging.debug(f'No details found for contract number {contractNumber}')
     print(f'Total Contract Details records for Part 1 {tRecords}')
     logging.debug(f'Total Contract Details records for Part 1 {tRecords}')
-
-
-def get_pxc_contracts_details_part2():
-    # Function to get the Contract List from PX Cloud
-    # This API will fetch list of partner contract line items transacted with Cisco.
-    # CSV Naming Convention: Contract_Details.csv
-    # JSON Naming Convention: {Customer Name}_Contract_Details_{ContractNumber}_Page_{page}_of_{total}.json
-    logging.debug('********************** Running Contract Details **********************\n')
-    tRecords = 0
-    while contractsFlag == 0:
-        logging.debug(f'Waiting on Contracts List to finish')
-        time.sleep(1)
-    print('Started Running Contract Details Report Part 2')
-    token_time_check()
-    if outputFormat == 1 or outputFormat == 3:
-        with open('temp/CD_1.csv', 'w', encoding='utf-8', newline='') as target:
-            CSV_Header = 'customerName,customerGUName,customerHQName,contractNumber,productId,serialNumber,' \
-                         'contractStatus,componentType,serviceLevel,coverageStartDate,coverageEndDate,' \
-                         'installationQuantity,instanceNumber'
-            writer = csv.writer(target, delimiter=' ', quotechar=' ', quoting=csv.QUOTE_NONE)
-            writer.writerow(CSV_Header.split())
-    with open('temp/split_1.csv', 'r') as target:
-        contractList = csv.DictReader(target)
-        for row in contractList:
-            customerName = row['customerName'].replace(',', ' ')
-            contractNumber = row['contractNumber']
-            logging.debug(f'Collecting contract details for {customerName}')
-            headers = {'Authorization': f'Bearer {token}', 'Content-Type': 'application/json'}
-            url = f'{pxc_url_contracts_details}?contractNumber={contractNumber}'
-            logging.debug(f'Scanning {customerName} for contract Number: {contractNumber}')
-            max_contractDetailsPart2_attempts = 10
-            contractDetailsPart2_attempts = 0
-            while contractDetailsPart2_attempts < max_contractDetailsPart2_attempts:
-                # Make a request to API
-                for i in range(10):
-                    i += 1
-                    logging.debug(f'Request attempt number {i}')
-                    try:
-                        response = requests.request('GET', url, headers=headers, data=data_payload,
-                                                    verify=True, timeout=apiTimeout)
-                        if i > 1:
-                            logging.debug(f'API request retry # {i} was successful')
-                        break
-                    except Timeout:
-                        logging.debug(f'Time out error getting resonse')
-                # If not rate limited, break out of while loop and continue
-                if response.status_code != 429:
-                    logging.debug(f'Querying:')
-                    logging.debug(f'URL Request: {url}')
-                    logging.debug(f'Request Body: {data_payload}')
-                    logging.debug(f'HTTP Code:{response.status_code}')
-                    logging.debug(f'Review API Headers:{response.headers}')
-                    logging.debug(f'Response Body:{response.content}')
-                    if contractDetailsPart2_attempts == 0:
-                        logging.debug('Success')
-                    break
-                # If rate limited, wait and try again
-                logging.debug('Rate Limit Exceeded for Contract Details Report! Retrying...')
-                logging.debug(f'URL Request: {url}')
-                logging.debug(f'Request Body: {data_payload}')
-                logging.debug(f'HTTP Code:{response.status_code}')
-                logging.debug(f'Review API Headers:{response.headers}')
-                logging.debug(f'Response Body:{response.content}')
-                contractDetailsPart2_attempts += 1
-                pause = random.random()
-                logging.debug(f'sleeping for {pause} seconds')
-                time.sleep(pause)
-            if contractDetailsPart2_attempts > 0:
-                logging.debug(f'Retry was successful for Contract Details Report')
-                logging.debug(f'URL Request: {url}')
-                logging.debug(f'Request Body: {data_payload}')
-                logging.debug(f'HTTP Code:{response.status_code}')
-                logging.debug(f'Review API Headers:{response.headers}')
-                logging.debug(f'Response Body:{response.content}')
-            reply = json.loads(response.text)
-            logging.debug(f'URL Request: {url}')
-            logging.debug(f'Request Body: {data_payload}')
-            logging.debug(f'HTTP Code:{response.status_code}')
-            logging.debug(f'Review API Headers:{response.headers}')
-            logging.debug(f'Response Body:{response.content}')
-            totalCount = reply['totalCount']
-            if totalCount > 0:
-                logging.debug(f'Details found for contract {contractNumber}')
-                pages = math.ceil(totalCount / int(max_items))
-                logging.debug(f'Total Pages: {pages}')
-                logging.debug(f'Total Records: {totalCount}')
-                logging.debug(f'URL Request: {url}')
-                logging.debug(f'Request Body: {data_payload}')
-                logging.debug(f'HTTP Code:{response.status_code}')
-                logging.debug(f'Review API Headers:{response.headers}')
-                logging.debug(f'Response Body:{response.content}')
-                page = 0
-                while page < pages:
-                    offset = get_pxc_offset(page, max_items)
-                    url = f'{pxc_url_contracts_details}?contractNumber={contractNumber}' \
-                          f'&{offset}max={max_items}'
-                    items = (get_json_reply(url, tag='items', report='Contract Details Report'))
-                    if items:
-                        if outputFormat == 1 or outputFormat == 2:
-                            if items is not None:
-                                if len(items) > 0:
-                                    json_file = (json_output_dir + customerName.replace('/', '-') +
-                                                 '_Contract_Details_' + contractNumber +
-                                                 '_Page_' + str(page + 1) +
-                                                 '_of_' + str(pages) +
-                                                 '.json')
-                                    if not os.path.isfile(json_file):
-                                        with open(json_file, 'w') as fileTarget:
-                                            json.dump(items, fileTarget)
-                                            logging.debug(f'Saving {json_file}')
-                                    else:
-                                        logging.debug('Duplcates found and being ignored...')
-                        if outputFormat == 1 or outputFormat == 3:
-                            if items is not None:
-                                if len(items) > 0:
-                                    for item in items:
-                                        customerGUName = str(item['customerGUName'].replace(',', ' '))
-                                        customerHQName = str(item['customerHQName'].replace(',', ' '))
-                                        productId = str(item['productId'].replace(',', ' '))
-                                        try:
-                                            serialNumber = str(item['serialNumber'])
-                                        except KeyError:
-                                            serialNumber = 'N/A'
-                                            pass
-                                        contractStatus = str(item['contractStatus'])
-                                        componentType = str(item['componentType'].replace(',', ' '))
-                                        serviceLevel = str(item['serviceLevel'].replace(',', ' '))
-                                        coverageStartDate = str(item['coverageStartDate'])
-                                        coverageEndDate = str(item['coverageEndDate'])
-                                        installationQuantity = str(item['installationQuantity'])
-                                        instanceNumber = str(item['instanceNumber'])
-                                        with open('temp/CD_1.csv', 'a', encoding='utf-8', newline='') \
-                                                as details_target:
-                                            writer = csv.writer(details_target,
-                                                                delimiter=' ',
-                                                                quotechar=' ',
-                                                                quoting=csv.QUOTE_MINIMAL)
-                                            CSV_Data = f'{customerName},{customerGUName},{customerHQName},' \
-                                                       f'{contractNumber},{productId},{serialNumber},' \
-                                                       f'{contractStatus},{componentType},{serviceLevel},' \
-                                                       f'{coverageStartDate},{coverageEndDate},' \
-                                                       f'{installationQuantity},{instanceNumber}'
-                                            writer.writerow(CSV_Data.split())
-                                            tRecords += 1
-                    page += 1
-                logging.debug(f'Collected Details for contract number {contractNumber}')
-            else:
-                logging.debug(f'No details found for contract number {contractNumber}')
-    print(f'Total Contract Details records for Part 2 {tRecords}')
-    logging.debug(f'Total Contract Details records for Part 2 {tRecords}')
-
-
-def get_pxc_contracts_details_part3():
-    # Function to get the Contract List from PX Cloud
-    # This API will fetch list of partner contract line items transacted with Cisco.
-    # CSV Naming Convention: Contract_Details.csv
-    # JSON Naming Convention: {Customer Name}_Contract_Details_{ContractNumber}_Page_{page}_of_{total}.json
-    logging.debug('********************** Running Contract Details **********************\n')
-    tRecords = 0
-    while contractsFlag == 0:
-        logging.debug(f'Waiting on Contracts List to finish')
-        time.sleep(1)
-    print('Started Running Contract Details Report Part 3')
-    token_time_check()
-    if outputFormat == 1 or outputFormat == 3:
-        with open('temp/CD_2.csv', 'w', encoding='utf-8', newline='') as target:
-            CSV_Header = 'customerName,customerGUName,customerHQName,contractNumber,productId,serialNumber,' \
-                         'contractStatus,componentType,serviceLevel,coverageStartDate,coverageEndDate,' \
-                         'installationQuantity,instanceNumber'
-            writer = csv.writer(target, delimiter=' ', quotechar=' ', quoting=csv.QUOTE_NONE)
-            writer.writerow(CSV_Header.split())
-    with open('temp/split_2.csv', 'r') as target:
-        contractList = csv.DictReader(target)
-        for row in contractList:
-            customerName = row['customerName'].replace(',', ' ')
-            contractNumber = row['contractNumber']
-            logging.debug(f'Collecting contract details for {customerName}')
-            headers = {'Authorization': f'Bearer {token}', 'Content-Type': 'application/json'}
-            url = f'{pxc_url_contracts_details}?contractNumber={contractNumber}'
-            logging.debug(f'Scanning {customerName} for contract Number: {contractNumber}')
-            max_contractDetailsPart3_attempts = 10
-            contractDetailsPart3_attempts = 0
-            while contractDetailsPart3_attempts < max_contractDetailsPart3_attempts:
-                # Make a request to API
-                for i in range(10):
-                    i += 1
-                    logging.debug(f'Request attempt number {i}')
-                    try:
-                        response = requests.request('GET', url, headers=headers, data=data_payload,
-                                                    verify=True, timeout=apiTimeout)
-                        if i > 1:
-                            logging.debug(f'API request retry # {i} was successful')
-                        break
-                    except Timeout:
-                        logging.debug(f'Time out error getting resonse')
-                # If not rate limited, break out of while loop and continue
-                if response.status_code != 429:
-                    logging.debug(f'Querying:')
-                    logging.debug(f'URL Request: {url}')
-                    logging.debug(f'Request Body: {data_payload}')
-                    logging.debug(f'HTTP Code:{response.status_code}')
-                    logging.debug(f'Review API Headers:{response.headers}')
-                    logging.debug(f'Response Body:{response.content}')
-                    if contractDetailsPart3_attempts == 0:
-                        logging.debug('Success')
-                    break
-                # If rate limited, wait and try again
-                logging.debug('Rate Limit Exceeded for Contract Details Report! Retrying...')
-                logging.debug(f'URL Request: {url}')
-                logging.debug(f'Request Body: {data_payload}')
-                logging.debug(f'HTTP Code:{response.status_code}')
-                logging.debug(f'Review API Headers:{response.headers}')
-                logging.debug(f'Response Body:{response.content}')
-                contractDetailsPart3_attempts += 1
-                pause = random.random()
-                logging.debug(f'sleeping for {pause} seconds')
-                time.sleep(pause)
-            if contractDetailsPart3_attempts > 0:
-                logging.debug(f'Retry was successful for Contract Details Report')
-                logging.debug(f'URL Request: {url}')
-                logging.debug(f'Request Body: {data_payload}')
-                logging.debug(f'HTTP Code:{response.status_code}')
-                logging.debug(f'Review API Headers:{response.headers}')
-                logging.debug(f'Response Body:{response.content}')
-            reply = json.loads(response.text)
-            logging.debug(f'URL Request: {url}')
-            logging.debug(f'Request Body: {data_payload}')
-            logging.debug(f'HTTP Code:{response.status_code}')
-            logging.debug(f'Review API Headers:{response.headers}')
-            logging.debug(f'Response Body:{response.content}')
-            totalCount = reply['totalCount']
-            if totalCount > 0:
-                logging.debug(f'Details found for contract {contractNumber}')
-                pages = math.ceil(totalCount / int(max_items))
-                logging.debug(f'Total Pages: {pages}')
-                logging.debug(f'Total Records: {totalCount}')
-                logging.debug(f'URL Request: {url}')
-                logging.debug(f'Request Body: {data_payload}')
-                logging.debug(f'HTTP Code:{response.status_code}')
-                logging.debug(f'Review API Headers:{response.headers}')
-                logging.debug(f'Response Body:{response.content}')
-                page = 0
-                while page < pages:
-                    offset = get_pxc_offset(page, max_items)
-                    url = f'{pxc_url_contracts_details}?contractNumber={contractNumber}' \
-                          f'&{offset}max={max_items}'
-                    items = (get_json_reply(url, tag='items', report='Contract Details Report'))
-                    if items:
-                        if outputFormat == 1 or outputFormat == 2:
-                            if items is not None:
-                                if len(items) > 0:
-                                    json_file = (json_output_dir + customerName.replace('/', '-') +
-                                                 '_Contract_Details_' + contractNumber +
-                                                 '_Page_' + str(page + 1) +
-                                                 '_of_' + str(pages) +
-                                                 '.json')
-                                    if not os.path.isfile(json_file):
-                                        with open(json_file, 'w') as fileTarget:
-                                            json.dump(items, fileTarget)
-                                            logging.debug(f'Saving {json_file}')
-                                    else:
-                                        logging.debug('Duplcates found and being ignored...')
-                        if outputFormat == 1 or outputFormat == 3:
-                            if items is not None:
-                                if len(items) > 0:
-                                    for item in items:
-                                        customerGUName = str(item['customerGUName'].replace(',', ' '))
-                                        customerHQName = str(item['customerHQName'].replace(',', ' '))
-                                        productId = str(item['productId'].replace(',', ' '))
-                                        try:
-                                            serialNumber = str(item['serialNumber'])
-                                        except KeyError:
-                                            serialNumber = 'N/A'
-                                            pass
-                                        contractStatus = str(item['contractStatus'])
-                                        componentType = str(item['componentType'].replace(',', ' '))
-                                        serviceLevel = str(item['serviceLevel'].replace(',', ' '))
-                                        coverageStartDate = str(item['coverageStartDate'])
-                                        coverageEndDate = str(item['coverageEndDate'])
-                                        installationQuantity = str(item['installationQuantity'])
-                                        instanceNumber = str(item['instanceNumber'])
-                                        with open('temp/CD_2.csv', 'a', encoding='utf-8', newline='') \
-                                                as details_target:
-                                            writer = csv.writer(details_target,
-                                                                delimiter=' ',
-                                                                quotechar=' ',
-                                                                quoting=csv.QUOTE_MINIMAL)
-                                            CSV_Data = f'{customerName},{customerGUName},{customerHQName},' \
-                                                       f'{contractNumber},{productId},{serialNumber},' \
-                                                       f'{contractStatus},{componentType},{serviceLevel},' \
-                                                       f'{coverageStartDate},{coverageEndDate},' \
-                                                       f'{installationQuantity},{instanceNumber}'
-                                            writer.writerow(CSV_Data.split())
-                                            tRecords += 1
-                    page += 1
-                logging.debug(f'Collected Details for contract number {contractNumber}')
-            else:
-                logging.debug(f'No details found for contract number {contractNumber}')
-    print(f'Total Contract Details records for Part 3 {tRecords}')
-    logging.debug(f'Total Contract Details records for Part 3 {tRecords}')
-
-
-def merge_files_with_os(csvfile1, csvfile2, csvfile3, merged_file):
-    outputFile = csv.writer(open(merged_file,  'w', encoding='utf-8', newline=''))
-    firstfile = True
-    for file in [csvfile1, csvfile2, csvfile3]:
-        with open(file, 'r') as rawfile:
-            reader = csv.reader(rawfile)
-            for idx, row in enumerate(reader):
-                if idx == 0 and not firstfile:
-                    continue
-                outputFile.writerow(row)
-        firstfile = False
 
 
 def get_pxc_partner_offers():
@@ -1583,11 +1430,7 @@ def get_pxc_partner_offers():
                     description = str(item['description']).replace(',', ' ')
                     duration = str(item['duration'])
                     accTimeRequiredHours = str(item['accTimeRequiredHours'])
-                    try:
-                        imageFileName = str(item['imageFileName']).replace(',', ' ')
-                    except KeyError:
-                        imageFileName = 'None'
-                        pass
+                    imageFileName = str(item.get('imageFileName', 'None')).replace(',', ' ')
                     customerRating = str(item['customerRating'])
                     status = str(item['status']).replace(',', ' ')
                     userFirstName = str(item['userFirstName']).replace(',', ' ')
@@ -1618,11 +1461,8 @@ def get_pxc_partner_offers():
                             for row in checklists:
                                 mappingChecklistId = str(row['mappingChecklistId'])
                                 checklistId = str(row['checklistId'])
-                                try:
-                                    checklist = str(row['checklist'])
-                                except KeyError:
-                                    checklist = 'N/A'
-                                    pass
+                                checklist = str(row.get('checklist', 'N/A'))
+
                                 with open(partnerOffers, 'a', encoding='utf-8', newline='') as target:
                                     writer = csv.writer(target,
                                                         delimiter=' ',
@@ -1678,21 +1518,11 @@ def get_pxc_partner_offer_sessions():
                         timezone = session['timezone'].replace(',', ' ')
                         status = session['status'].replace(',', ' ')
                         noOfAttendees = str(session['noOfAttendees'])
-                        try:
-                            preferredSlot = session['preferredSlot'].replace(',', ' ')
-                        except KeyError:
-                            preferredSlot = 'N/A'
-                            pass
-                        try:
-                            businessOutcome = session['businessOutcome'].replace(',', ' ')
-                        except KeyError:
-                            businessOutcome = 'N/A'
-                            pass
-                        try:
-                            reasonForInterest = session['reasonForInterest'].replace(',', ' ')
-                        except KeyError:
-                            reasonForInterest = 'N/A'
-                            pass
+
+                        preferredSlot = session.get('preferredSlot', 'N/A').replace(',', ' ')
+                        businessOutcome = session.get('businessOutcome', 'N/A').replace(',', ' ')
+                        reasonForInterest = session.get('reasonForInterest', 'N/A').replace(',', ' ')
+
                         createdDate = str(session['createdDate'])
                         modifiedDate = str(session['modifiedDate'])
                         attendeeList = session['attendeeList']
@@ -1705,11 +1535,7 @@ def get_pxc_partner_offer_sessions():
                                              'companyName': 'N/A'}]
                         for attendee in attendeeList:
                             attendeeId = attendee['attendeeId'].replace(',', ' ')
-                            try:
-                                ccoId = attendee['ccoId'].replace(',', ' ')
-                            except KeyError:
-                                ccoId = 'N/A'
-                                pass
+                            ccoId = attendee.get('ccoId', 'N/A').replace(',', ' ')
                             attendeeUserEmail = attendee['attendeeUserEmail'].replace(',', ' ')
                             attendeeUserFullName = attendee['attendeeUserFullName'].replace(',', ' ')
                             customerId = attendee['customerId'].replace(',', ' ')
@@ -1978,26 +1804,18 @@ def pxc_assets_reports():
                                     assetName = str(item['assetName'])
                                     productFamily = str(item['productFamily']).replace(',', ' ')
                                     productType = str(item['productType']).replace(',', ' ')
-                                    serialNumber = str(item['serialNumber'])
+                                    serialNumber = str(item.get('serialNumber', 'N/A'))
                                     productId = str(item['productId'])
                                     ipAddress = str(item['ipAddress'])
                                     productDescription = str(item['productDescription']).replace(',', ' ')
                                     softwareType = str(item['softwareType']).replace(',', ' ')
                                     softwareRelease = str(item['softwareRelease'])
-                                    try:
-                                        role = str((item['role']))
-                                    except KeyError:
-                                        role = 'N/A'
-                                        pass
+                                    role = str(item.get('role', 'N/A'))
                                     assetLocation = str(item['location']).replace(',', ' ')
                                     coverageStatus = str(item['coverageStatus'])
-                                    try:
-                                        lastScan = str(item['lastScan'])
-                                        if lastScan == 'None':
-                                            lastScan = ''
-                                    except KeyError:
+                                    lastScan = str(item.get('lastScan', ''))
+                                    if lastScan == 'None':
                                         lastScan = ''
-                                        pass
                                     successTrack = item['successTrack']
                                     endOfLifeAnnounced = str(item['endOfLifeAnnounced'])
                                     if endOfLifeAnnounced == 'None':
@@ -2021,11 +1839,7 @@ def pxc_assets_reports():
                                     if ldosDate == 'None':
                                         ldosDate = ''
                                     connectionStatus = str(item['connectionStatus'])
-                                    try:
-                                        managedBy = str(item['managedBy'])
-                                    except KeyError:
-                                        managedBy = 'N/A'
-                                        pass
+                                    managedBy = str(item.get('managedBy', 'N/A'))
                                     contractNumber = str(item['contractNumber'])
                                     coverageEndDate = str(item['coverageEndDate'])
                                     if coverageEndDate == 'None':
@@ -2036,75 +1850,20 @@ def pxc_assets_reports():
                                     supportType = str(item['supportType'])
                                     advisories = str(item['advisories'])
                                     assetType = str(item['assetType'])
-                                    try:
-                                        criticalSecurityAdvisories = str(item['criticalSecurityAdvisories'])
-                                    except KeyError:
-                                        criticalSecurityAdvisories = ''
-                                        pass
-                                    try:
-                                        addressLine1 = str(item['addressLine1']).replace(',', ' ')
-                                    except KeyError:
-                                        addressLine1 = ''
-                                        pass
-                                    try:
-                                        addressLine2 = str(item['addressLine2']).replace(',', ' ')
-                                    except KeyError:
-                                        addressLine2 = ''
-                                        pass
-                                    try:
-                                        addressLine3 = str(item['addressLine3']).replace(',', ' ')
-                                    except KeyError:
-                                        addressLine3 = ''
-                                        pass
-                                    try:
-                                        licenseStatus = str(item['licenseStatus'])
-                                    except KeyError:
-                                        licenseStatus = ''
-                                        pass
-                                    try:
-                                        licenseLevel = str(item['licenseLevel'])
-                                    except KeyError:
-                                        licenseLevel = ''
-                                        pass
-                                    try:
-                                        profileName = str(item['profileName']).replace(',', ' ')
-                                    except KeyError:
-                                        profileName = ''
-                                        pass
-                                    try:
-                                        hclStatus = str(item['hclStatus'])
-                                    except KeyError:
-                                        hclStatus = ''
-                                        pass
-                                    try:
-                                        ucsDomain = str(item['ucsDomain'])
-                                    except KeyError:
-                                        ucsDomain = ''
-                                        pass
-                                    try:
-                                        hxCluster = str(item['hxCluster'])
-                                    except KeyError:
-                                        hxCluster = ''
-                                        pass
-                                    try:
-                                        subscriptionId = str(item['subscriptionId'])
-                                    except KeyError:
-                                        subscriptionId = ''
-                                        pass
-                                    try:
-                                        subscriptionStartDate = str(item['subscriptionStartDate'])
-                                        if subscriptionStartDate == 'None':
-                                            subscriptionStartDate = ''
-                                    except KeyError:
-                                        subscriptionStartDate = ''
-                                        pass
-                                    try:
-                                        subscriptionEndDate = str(item['subscriptionEndDate'])
-                                        if subscriptionEndDate == 'None':
-                                            subscriptionEndDate = ''
-                                    except KeyError:
-                                        subscriptionEndDate = ''
-                                        pass
+                                    criticalSecurityAdvisories = str(item.get('criticalSecurityAdvisories', ''))
+                                    addressLine1 = str(item.get('addressLine1', '')).replace(',', ' ')
+                                    addressLine2 = str(item.get('addressLine2', '')).replace(',', ' ')
+                                    addressLine3 = str(item.get('addressLine3', '')).replace(',', ' ')
+                                    licenseStatus = str(item.get('licenseStatus', ''))
+                                    licenseLevel = str(item.get('licenseLevel', ''))
+                                    profileName = str(item.get('profileName', '')).replace(',', ' ')
+                                    hclStatus = str(item.get('hclStatus', ''))
+                                    ucsDomain = str(item.get('ucsDomain', ''))
+                                    hxCluster = str(item.get('hxCluster', ''))
+                                    subscriptionId = str(item.get('subscriptionId', ''))
+                                    subscriptionStartDate = str(item.get('subscriptionStartDate', '')).replace('None', '')
+                                    subscriptionEndDate = str(item.get('subscriptionEndDate', '')).replace('None', '')
+
                                     for track in successTrack:
                                         successTrackId = track['id']
                                         useCases = track['useCases']
@@ -2335,7 +2094,7 @@ def pxc_hardware_reports():
                                     assetName = str(item['assetName'])
                                     productFamily = str(item['productFamily']).replace(',', ' ')
                                     productId = str(item['productId'])
-                                    serialNumber = str(item['serialNumber'])
+                                    serialNumber = str(item.get('serialNumber', 'N/A'))
                                     successTrack = item['successTrack']
                                     endOfLifeAnnounced = str(item['endOfLifeAnnounced'])
                                     if endOfLifeAnnounced == 'None':
@@ -2826,27 +2585,9 @@ def pxc_licenses_reports():
                                     connectionStatus = str(item['connectionStatus'])
                                     productDescription = str(item['productDescription']).replace(',', ' ')
                                     licenseId = str(item['license'])
-                                    try:
-                                        licenseStartDate = str(item['licenseStartDate'])
-                                        if licenseStartDate == 'None':
-                                            licenseStartDate = ''
-                                    except KeyError:
-                                        licenseStartDate = ''
-                                        pass
-                                    try:
-                                        licenseEndDate = str(item['licenseEndDate'])
-                                        if licenseEndDate == 'None':
-                                            licenseEndDate = ''
-                                    except KeyError:
-                                        licenseEndDate = ''
-                                        pass
-                                    try:
-                                        contractNumber = str(item['contractNumber'])
-                                        if contractNumber == 'None':
-                                            contractNumber = ''
-                                    except KeyError:
-                                        contractNumber = ''
-                                        pass
+                                    licenseStartDate = str(item.get('licenseStartDate', '')).replace('None', '')
+                                    licenseEndDate = str(item.get('licenseEndDate', '')).replace('None', '')
+                                    contractNumber = str(item.get('contractNumber', '')).replace('None', '')
                                     subscriptionId = str(item['subscriptionId'])
                                     supportType = str(item['supportType']).replace(',', ' ')
                                     successTrack = item['successTrack']
@@ -3292,7 +3033,7 @@ def pxc_security_advisories_reports():
                                     assetName = str(item['assetName'])
                                     assetId = str(item['assetId']).replace(',', '_')
                                     ipAddress = str(item['ipAddress'])
-                                    serialNumber = str(item['serialNumber'])
+                                    serialNumber = str(item.get('serialNumber', 'N/A'))
                                     successTrack = item['successTrack']
                                     advisoryId = str(item['advisoryId']).replace(',', ' ')
                                     impact = str(item['impact']).replace(',', ' ')
@@ -3307,11 +3048,7 @@ def pxc_security_advisories_reports():
                                     additionalNotes = str(item['additionalNotes']).replace(',', ' ')
                                     affectedStatus = str(item['affectedStatus'])
                                     affectedReasons = item['affectedReason']
-                                    try:
-                                        additionalVerificationNeeded = item['additionalVerificationNeeded']
-                                    except KeyError:
-                                        additionalVerificationNeeded = 'Not Available'
-                                        pass
+                                    additionalVerificationNeeded = item.get('additionalVerificationNeeded', 'Not Available')
                                     softwareRelease = str(item['softwareRelease'])
                                     productId = str(item['productId'])
                                     for track in successTrack:
@@ -3536,7 +3273,7 @@ def pxc_field_notices_reports():
                                     hwInstanceId = str(item['hwInstanceId']).replace(',', ' ')
                                     assetName = str(item['assetName'])
                                     productId = str(item['productId'])
-                                    serialNumber = str(item['serialNumber'])
+                                    serialNumber = str(item.get('serialNumber', 'N/A'))
                                     successTrack = item['successTrack']
                                     fieldNoticeId = str(item['fieldNoticeId'])
                                     updated = str(item['updated']).replace(',', ' ')
@@ -3771,7 +3508,7 @@ def pxc_priority_bugs_reports():
                                 for item in items:
                                     assetName = str(item['assetName'])
                                     assetId = str(item['assetId']).replace(',', '_')
-                                    serialNumber = str(item['serialNumber'])
+                                    serialNumber = str(item.get('serialNumber', 'N/A'))
                                     ipAddress = str(item['ipAddress'])
                                     softwareRelease = str(item['softwareRelease'])
                                     productId = str(item['productId'])
@@ -3913,6 +3650,8 @@ def pxc_software_groups():
                          'sourceSystemId,softwareGroupId,managedBy'
             writeheader = csv.writer(target, delimiter=' ', quotechar=' ', quoting=csv.QUOTE_NONE)
             writeheader.writerow(CSV_Header.split())
+    #end with
+
     with open(OSV_AFM_List, 'r') as cust_target:
         custList = csv.DictReader(cust_target)
         for row in custList:
@@ -3961,9 +3700,14 @@ def pxc_software_groups():
 
                 else:
                     logging.debug('No Software Group Data Found .... Skipping')
+                #end if items
+            #enf if successTracks
+        #end if row
+    #end with
+
     software_groupsFlag += 1
-    logging.debug(f'Total Software Group records {tRecords}')
-    print(f'Total Software Group records {tRecords}')
+    logging.debug(f'Total Software Group records {tRecords} :: swg_flag={software_groupsFlag}')
+    print(f'Total Software Group records {tRecords} :: swg_flag={software_groupsFlag}')
 
 
 def pxc_software_group_suggestions():
@@ -3982,7 +3726,7 @@ def pxc_software_group_suggestions():
     while software_groupsFlag == 0:
         logging.debug(f'Waiting on Software Groups Report to finish')
         time.sleep(1)
-    print('Started Running Software Groups Suggestions  Report')
+    print('Started Running Software Groups Suggestions Report')
     if outputFormat == 1 or outputFormat == 3:
         with open(SWGroupSuggestionsTrend, 'w', encoding='utf-8', newline='') as target:
             CSV_Header = 'customerId,customerName,successTrackId,suggestionId,suggestionsInterval,' \
@@ -4032,7 +3776,7 @@ def pxc_software_group_suggestions():
                     SWGroups_attempts = 0
                     while SWGroups_attempts < max_SWGroups_attempts:
                         # Make a request to API
-                        for i in range(10):
+                        for i in range(pxc_api_retry):
                             i += 1
                             logging.debug(f'Request attempt number {i}')
                             try:
@@ -4132,6 +3876,8 @@ def pxc_software_group_suggestions():
                                        f'{releaseSummaryName},{releaseSummaryReleaseDate},{releaseSummaryRelease}'
                             writer.writerow(CSV_Data.split())
                             tRecordsReleases += 1
+
+
                 try:
                     suggestionSummaries = (get_json_reply(url,
                                                           tag='suggestionSummaries',
@@ -4139,7 +3885,9 @@ def pxc_software_group_suggestions():
                 except Exception as Error:
                     logging.debug(Error)
                     suggestionSummaries = []
-                logging.debug(f'Saving Software Group Summaries to CSV')
+
+
+                logging.debug(f'Saving Software Group Suggestion Summaries to CSV')
                 if suggestionSummaries is not None:
                     for item in suggestionSummaries:
                         machineSuggestionId = str(item['machineSuggestionId'])
@@ -4148,158 +3896,67 @@ def pxc_software_group_suggestions():
                         name = str(item['name'])
                         releaseDate = str(item['releaseDate'])
                         release = str(item['release']).replace(',', '-')
-                        releaseNotesUrl = str(item['releaseNotesUrl'])
                         fieldNoticeSeverity = (item['fieldNoticeSeverity'])
-                        try:
-                            exposed = fieldNoticeSeverity['Exposed']
-                            fieldNoticeSeverityExposedHigh = str(exposed['High'])
-                        except KeyError:
-                            fieldNoticeSeverityExposedHigh = '0'
-                        try:
-                            exposed = fieldNoticeSeverity['Exposed']
-                            fieldNoticeSeverityExposedMedium = str(exposed['Medium'])
-                        except KeyError:
-                            fieldNoticeSeverityExposedMedium = '0'
-                        try:
-                            exposed = fieldNoticeSeverity['Exposed']
-                            fieldNoticeSeverityExposedLow = str(exposed['Low'])
-                        except KeyError:
-                            fieldNoticeSeverityExposedLow = '0'
-                        try:
-                            fixed = fieldNoticeSeverity['Fixed']
-                            fieldNoticeSeverityFixedHigh = str(fixed['High'])
-                        except KeyError:
-                            fieldNoticeSeverityFixedHigh = '0'
-                        try:
-                            fixed = fieldNoticeSeverity['Fixed']
-                            fieldNoticeSeverityFixedMedium = str(fixed['Medium'])
-                        except KeyError:
-                            fieldNoticeSeverityFixedMedium = '0'
-                        try:
-                            fixed = fieldNoticeSeverity['Fixed']
-                            fieldNoticeSeverityFixedLow = str(fixed['Low'])
-                        except KeyError:
-                            fieldNoticeSeverityFixedLow = '0'
-                        try:
-                            newExposed = fieldNoticeSeverity['New_Exposed']
-                            fieldNoticeSeverityNewExposedHigh = str(newExposed['High'])
-                        except KeyError:
-                            fieldNoticeSeverityNewExposedHigh = '0'
-                        try:
-                            newExposed = fieldNoticeSeverity['New_Exposed']
-                            fieldNoticeSeverityNewExposedMedium = str(newExposed['Medium'])
-                        except KeyError:
-                            fieldNoticeSeverityNewExposedMedium = '0'
-                        try:
-                            newExposed = fieldNoticeSeverity['New_Exposed']
-                            fieldNoticeSeverityNewExposedLow = str(newExposed['Low'])
-                        except KeyError:
-                            fieldNoticeSeverityNewExposedLow = '0'
-                        advisoriesSeverity = (item['advisoriesSeverity'])
-                        try:
-                            exposed = advisoriesSeverity['Exposed']
-                            advisoriesSeverityExposedHigh = str(exposed['High'])
-                        except KeyError:
-                            advisoriesSeverityExposedHigh = '0'
-                        try:
-                            exposed = advisoriesSeverity['Exposed']
-                            advisoriesSeverityExposedMedium = str(exposed['Medium'])
-                        except KeyError:
-                            advisoriesSeverityExposedMedium = '0'
-                        try:
-                            exposed = advisoriesSeverity['Exposed']
-                            advisoriesSeverityExposedLow = str(exposed['Low'])
-                        except KeyError:
-                            advisoriesSeverityExposedLow = '0'
-                        try:
-                            fixed = advisoriesSeverity['Fixed']
-                            advisoriesSeverityFixedHigh = str(fixed['High'])
-                        except KeyError:
-                            advisoriesSeverityFixedHigh = '0'
-                        try:
-                            fixed = advisoriesSeverity['Fixed']
-                            advisoriesSeverityFixedMedium = str(fixed['Medium'])
-                        except KeyError:
-                            advisoriesSeverityFixedMedium = '0'
-                        try:
-                            fixed = advisoriesSeverity['Fixed']
-                            advisoriesSeverityFixedLow = str(fixed['Low'])
-                        except KeyError:
-                            advisoriesSeverityFixedLow = '0'
-                        try:
-                            newExposed = advisoriesSeverity['New_Exposed']
-                            advisoriesSeverityNewExposedHigh = str(newExposed['High'])
-                        except KeyError:
-                            advisoriesSeverityNewExposedHigh = '0'
-                        try:
-                            newExposed = advisoriesSeverity['New_Exposed']
-                            advisoriesSeverityNewExposedMedium = str(newExposed['Medium'])
-                        except KeyError:
-                            advisoriesSeverityNewExposedMedium = '0'
-                        try:
-                            newExposed = advisoriesSeverity['New_Exposed']
-                            advisoriesSeverityNewExposedLow = str(newExposed['Low'])
-                        except KeyError:
-                            advisoriesSeverityNewExposedLow = '0'
-                        bugSeverity = (item['bugSeverity'])
-                        try:
-                            exposed = bugSeverity['Exposed']
-                            bugSeverityExposedHigh = str(exposed['High'])
-                        except KeyError:
-                            bugSeverityExposedHigh = '0'
-                        try:
-                            exposed = bugSeverity['Exposed']
-                            bugSeverityExposedMedium = str(exposed['Medium'])
-                        except KeyError:
-                            bugSeverityExposedMedium = '0'
-                        try:
-                            exposed = bugSeverity['Exposed']
-                            bugSeverityExposedLow = str(exposed['Low'])
-                        except KeyError:
-                            bugSeverityExposedLow = '0'
-                        try:
-                            fixed = bugSeverity['Fixed']
-                            bugSeverityFixedHigh = str(fixed['High'])
-                        except KeyError:
-                            bugSeverityFixedHigh = '0'
-                        try:
-                            fixed = bugSeverity['Fixed']
-                            bugSeverityFixedMedium = str(fixed['Medium'])
-                        except KeyError:
-                            bugSeverityFixedMedium = '0'
-                        try:
-                            fixed = bugSeverity['Fixed']
-                            bugSeverityFixedLow = str(fixed['Low'])
-                        except KeyError:
-                            bugSeverityFixedLow = '0'
-                        try:
-                            newExposed = bugSeverity['New_Exposed']
-                            bugSeverityNewExposedHigh = str(newExposed['High'])
-                        except KeyError:
-                            bugSeverityNewExposedHigh = '0'
-                        try:
-                            newExposed = bugSeverity['New_Exposed']
-                            bugSeverityNewExposedMedium = str(newExposed['Medium'])
-                        except KeyError:
-                            bugSeverityNewExposedMedium = '0'
-                        try:
-                            newExposed = bugSeverity['New_Exposed']
-                            bugSeverityNewExposedLow = str(newExposed['Low'])
-                        except KeyError:
-                            bugSeverityNewExposedLow = '0'
-                        featuresCount = (item['featuresCount'])
-                        try:
-                            featuresCountActiveFeaturesCount = str(featuresCount['activeFeaturesCount'])
-                        except KeyError:
-                            featuresCountActiveFeaturesCount = '0'
-                        try:
-                            featuresCountAffectedFeaturesCount = str(featuresCount['affectedFeaturesCount'])
-                        except KeyError:
-                            featuresCountAffectedFeaturesCount = '0'
-                        try:
-                            featuresCountFixedFeaturesCount = str(featuresCount['fixedFeaturesCount'])
-                        except KeyError:
-                            featuresCountFixedFeaturesCount = '0'
+
+                        releaseNotesUrl = str(item.get('releaseNotesUrl', ''))
+
+                        # Handling fieldNoticeSeverity
+                        fieldNoticeSeverity = item.get('fieldNoticeSeverity', {})
+                        exposed = fieldNoticeSeverity.get('Exposed', {})
+                        fieldNoticeSeverityExposedHigh = str(exposed.get('High', '0'))
+                        fieldNoticeSeverityExposedMedium = str(exposed.get('Medium', '0'))
+                        fieldNoticeSeverityExposedLow = str(exposed.get('Low', '0'))
+
+                        fixed = fieldNoticeSeverity.get('Fixed', {})
+                        fieldNoticeSeverityFixedHigh = str(fixed.get('High', '0'))
+                        fieldNoticeSeverityFixedMedium = str(fixed.get('Medium', '0'))
+                        fieldNoticeSeverityFixedLow = str(fixed.get('Low', '0'))
+
+                        newExposed = fieldNoticeSeverity.get('New_Exposed', {})
+                        fieldNoticeSeverityNewExposedHigh = str(newExposed.get('High', '0'))
+                        fieldNoticeSeverityNewExposedMedium = str(newExposed.get('Medium', '0'))
+                        fieldNoticeSeverityNewExposedLow = str(newExposed.get('Low', '0'))
+
+                        # Handling advisoriesSeverity
+                        advisoriesSeverity = item.get('advisoriesSeverity', {})
+                        exposed = advisoriesSeverity.get('Exposed', {})
+                        advisoriesSeverityExposedHigh = str(exposed.get('High', '0'))
+                        advisoriesSeverityExposedMedium = str(exposed.get('Medium', '0'))
+                        advisoriesSeverityExposedLow = str(exposed.get('Low', '0'))
+
+                        fixed = advisoriesSeverity.get('Fixed', {})
+                        advisoriesSeverityFixedHigh = str(fixed.get('High', '0'))
+                        advisoriesSeverityFixedMedium = str(fixed.get('Medium', '0'))
+                        advisoriesSeverityFixedLow = str(fixed.get('Low', '0'))
+
+                        newExposed = advisoriesSeverity.get('New_Exposed', {})
+                        advisoriesSeverityNewExposedHigh = str(newExposed.get('High', '0'))
+                        advisoriesSeverityNewExposedMedium = str(newExposed.get('Medium', '0'))
+                        advisoriesSeverityNewExposedLow = str(newExposed.get('Low', '0'))
+
+                        # Handling bugSeverity
+                        bugSeverity = item.get('bugSeverity', {})
+                        exposed = bugSeverity.get('Exposed', {})
+                        bugSeverityExposedHigh = str(exposed.get('High', '0'))
+                        bugSeverityExposedMedium = str(exposed.get('Medium', '0'))
+                        bugSeverityExposedLow = str(exposed.get('Low', '0'))
+
+                        fixed = bugSeverity.get('Fixed', {})
+                        bugSeverityFixedHigh = str(fixed.get('High', '0'))
+                        bugSeverityFixedMedium = str(fixed.get('Medium', '0'))
+                        bugSeverityFixedLow = str(fixed.get('Low', '0'))
+
+                        newExposed = bugSeverity.get('New_Exposed', {})
+                        bugSeverityNewExposedHigh = str(newExposed.get('High', '0'))
+                        bugSeverityNewExposedMedium = str(newExposed.get('Medium', '0'))
+                        bugSeverityNewExposedLow = str(newExposed.get('Low', '0'))
+
+                        # Handling featuresCount
+                        featuresCount = item.get('featuresCount', {})
+                        featuresCountActiveFeaturesCount = str(featuresCount.get('activeFeaturesCount', '0'))
+                        featuresCountAffectedFeaturesCount = str(featuresCount.get('affectedFeaturesCount', '0'))
+                        featuresCountFixedFeaturesCount = str(featuresCount.get('fixedFeaturesCount', '0'))
+
                         with open(SWGroupSuggestionSummaries, 'a', encoding='utf-8', newline='') \
                                 as temp_target:
                             writer = csv.writer(temp_target,
@@ -4336,7 +3993,7 @@ def pxc_software_group_suggestions():
     print(f'Total Software Groups Suggestion Summary records {tRecordsSummary}')
 
 
-def pxc_software_group_suggestions_assets():
+def pxc_swgroup_suggestions_assets():
     # This API returns information about assets in the Software Group based on the customerID and softwareGroupId.
     # CSV Naming Convention: SoftwareGroup_Suggestions_Assets.csv
     # JSON Naming Convention: {Customer ID}_SoftwareGroup_Suggestion_Assets_{Software Group ID}.json
@@ -4377,11 +4034,7 @@ def pxc_software_group_suggestions_assets():
                         for item in items:
                             deploymentStatus = str(item['deploymentStatus'])
                             selectedRelease = str(item['selectedRelease'])
-                            try:
-                                assetName = str(item['assetName'].replace(',', ' '))
-                            except KeyError:
-                                assetName = str(item['assetHostName'].replace(',', ' '))
-                                pass
+                            assetName = str(item.get('assetName', item.get('assetHostName', ''))).replace(',', ' ')
                             ipAddress = str(item['ipAddress'])
                             softwareType = str(item['softwareType'].replace(',', '|'))
                             currentRelease = str(item['currentRelease'])
@@ -4400,7 +4053,7 @@ def pxc_software_group_suggestions_assets():
     print(f'Total Software Groups Suggestions Asset records {tRecords}')
 
 
-def pxc_software_group_suggestions_bug_list():
+def pxc_swgroup_suggestions_bug_list():
     # This API returns information on bugs, including ID, description, and affected software releases.
     # CSV Naming Convention: SoftwareGroup_Suggestions_Bug_Lists.csv
     # JSON Naming Convention:
@@ -4434,7 +4087,7 @@ def pxc_software_group_suggestions_bug_list():
             SWGroupSuggestionsBugList_attempts = 0
             while SWGroupSuggestionsBugList_attempts < max_SWGroupSuggestionsBugList_attempts:
                 # Make a request to API
-                for i in range(10):
+                for i in range(pxc_api_retry):
                     i += 1
                     logging.debug(f'Request attempt number {i}')
                     try:
@@ -4526,7 +4179,7 @@ def pxc_software_group_suggestions_bug_list():
     print(f'Total Software Groups Suggestions Bug List records {tRecords}')
 
 
-def pxc_software_group_suggestions_field_notices():
+def pxc_swgroup_suggestions_field_notices():
     # This API returns field notice information, including ID number, title, and publish date.
     # CSV Naming Convention: SoftwareGroup_Suggestions_Field_Notices.csv
     # JSON Naming Convention:
@@ -4555,13 +4208,13 @@ def pxc_software_group_suggestions_field_notices():
                           f'on Success Track {successTrackId}')
             if row['successTrackId'] in insightList:
                 token_time_check()
-                url = f'{pxc_url_customers}{customerId}{pxc_url_software_group_suggestions_field_notices}?' \
+                url = f'{pxc_url_customers}{customerId}{pxc_url_software_group_suggestions_field_notices}?offset=0' \
                       f'&max={max_items}&machineSuggestionId={machineSuggestionId}&successTrackId={successTrackId}'
                 max_SWGroupSuggestionsFieldNotices_attempts = 10
                 SWGroupSuggestionsFieldNotices_attempts = 0
                 while SWGroupSuggestionsFieldNotices_attempts < max_SWGroupSuggestionsFieldNotices_attempts:
                     # Make a request to API
-                    for i in range(10):
+                    for i in range(pxc_api_retry):
                         i += 1
                         logging.debug(f'Request attempt number {i}')
                         try:
@@ -4663,7 +4316,7 @@ def pxc_software_group_suggestions_field_notices():
     print(f'Total Software Groups Suggestions Field Notice records {tRecords}')
 
 
-def pxc_software_group_suggestions_advisories():
+def pxc_swgroup_suggestions_advisories():
     # This API returns software advisory information, including ID number, version number, and severity level.
     # CSV Naming Convention: SoftwareGroup_Suggestions_Security_Advisories.csv
     # JSON Naming Convention:
@@ -4698,7 +4351,7 @@ def pxc_software_group_suggestions_advisories():
             SWGroupSuggestionsAdvisories_attempts = 0
             while SWGroupSuggestionsAdvisories_attempts < max_SWGroupSuggestionsAdvisories_attempts:
                 # Make a request to API
-                for i in range(10):
+                for i in range(pxc_api_retry):
                     i += 1
                     logging.debug(f'Request attempt number {i}')
                     try:
@@ -4863,11 +4516,8 @@ def pxc_afm_faults():
                         ignoredAssets = str(item['ignoredAssets'])
                         mgmtSystemType = str(item['mgmtSystemType'])
                         mgmtSystemAddr = str(item['mgmtSystemAddr'])
-                        try:
-                            mgmtSystemHostName = str(item['mgmtSystemHostName'])
-                        except KeyError:
-                            mgmtSystemHostName = 'N/A'
-                            pass
+                        mgmtSystemHostName = str(item.get('mgmtSystemHostName', 'N/A'))
+
                         with open(AFMFaults, 'a', encoding='utf-8', newline='') as target:
                             writer = csv.writer(target,
                                                 delimiter=' ',
@@ -5011,11 +4661,8 @@ def pxc_afm_affected_assets():
                             serialNumber = str(item['serialNumber'].replace(',', ' '))
                             mgmtSystemType = str(item['mgmtSystemType'])
                             mgmtSystemAddr = str(item['mgmtSystemAddr'])
-                            try:
-                                mgmtSystemHostName = str(item['mgmtSystemHostName'])
-                            except KeyError:
-                                mgmtSystemHostName = 'N/A'
-                                pass
+                            mgmtSystemHostName = str(item.get('mgmtSystemHostName', 'N/A'))
+
                             with open(AFMFaultAffectedAssets,
                                       'a', encoding='utf-8', newline='') as target:
                                 writer = csv.writer(target,
@@ -5133,7 +4780,7 @@ def pxc_compliance_violations():
                 logging.debug(f'Querying data for Compliance Violations Report')
                 while RCCComplianceViolations_attempts < max_RCCComplianceViolations_attempts:
                     # Make a request to API
-                    for i in range(10):
+                    for i in range(pxc_api_retry):
                         i += 1
                         logging.debug(f'Request attempt number {i}')
                         try:
@@ -5385,7 +5032,7 @@ def pxc_compliance_rule_details():
                     RCCPolicyRuleDetails_attempts = 0
                     while RCCPolicyRuleDetails_attempts < max_RCCPolicyRuleDetails_attempts:
                         # Make a request to API
-                        for i in range(10):
+                        for i in range(pxc_api_retry):
                             i += 1
                             logging.debug(f'Request attempt number {i}')
                             try:
@@ -5499,7 +5146,7 @@ def pxc_compliance_suggestions():
                 RCCComplianceViolations_attempts = 0
                 while RCCComplianceViolations_attempts < max_RCCComplianceViolations_attempts:
                     # Make a request to API
-                    for i in range(10):
+                    for i in range(pxc_api_retry):
                         i += 1
                         logging.debug(f'Request attempt number {i}')
                         try:
@@ -5639,7 +5286,7 @@ def pxc_assets_with_violations():
                         if len(items) > 0:
                             for item in items:
                                 ipAddress = str(item['ipAddress'])
-                                serialNumber = str(item['serialNumber'])
+                                serialNumber = str(item.get('serialNumber', 'N/A'))
                                 violationCount = str(item['violationCount'])
                                 assetGroups = str(item['assetGroups'])
                                 role = str(item['role'])
@@ -5785,7 +5432,7 @@ def pxc_optin():
                     RCCObtained_attempts = 0
                     while RCCObtained_attempts < max_RCCObtained_attempts:
                         # Make a request to API
-                        for i in range(10):
+                        for i in range(pxc_api_retry):
                             i += 1
                             logging.debug(f'Request attempt number {i}')
                             try:
@@ -5912,7 +5559,7 @@ def pxc_crash_risk_assets():
                                     productFamily = str(item['productFamily']).replace(',', ' ')
                                     softwareRelease = str(item['softwareRelease'])
                                     softwareType = str(item['softwareType']).replace(',', ' ')
-                                    serialNumber = str(item['serialNumber'])
+                                    serialNumber = str(item.get('serialNumber', 'N/A'))
                                     risk = str(item['risk'])
                                     endDate = str(item['endDate'])
                                     if debug_level > 0:
@@ -6245,70 +5892,133 @@ These include:  Optimal Software Version endpoints:
 
 
 def main():
+    global cpu_threads
+    chunks = 8   # Handle large downloads by chunking into parts 1-8
+
+    if cpu_threads > 4:
+        max_threads = 4
+
+    print('******************** Script Started Successfully ********************')
+    print(f'DataMinner for Cisco Success Tracks')
+    print(f'    Version: {codeVersion}')
+    print(f'    Threads: CPU:{cpu_threads}/Max:{max_threads}')
+    print(f'    Chunks:{chunks} Parts')
+    print(f'    Environment is: {environment}')
+    print(f'    API Retries: {pxc_api_retry}')
+    print(f'    Customer: {customer}')
+
     # Set number of itterations, time stamp, logging level and if the log should be written to file
     for x in range(0, testLoop):
-        print('******************** Script Started Successfully ********************')
         logging.debug('******************** Script Started Successfully ********************')
-        startTime = time.time()
-        print(f'Start Time: {datetime.now()}')
-        print(f'Execution: {x + 1} of {testLoop}\nVersion is: {codeVersion}\nEnvironment is: {environment}')
-        if outputFormat == 1:
-            print('Saving data in JSON and CSV formats')
-        if outputFormat == 2:
-            print('Saving data in JSON format')
-        if outputFormat == 3:
-            print('Saving data in CSV format')
-        temp_storage()  # delete temp and output directories and recreate before every run
+        logging.debug(f'Execution: {x + 1} of {testLoop}')
 
-        get_pxc_token()  # call the function to get a valid PX Cloud API token
-        get_pxc_customers()  # No requirements but all others require it
-        get_pxc_contracts()  # requires get_pxc_customers
-        csv_count_rows(csv_output_dir + 'unique_contracts.csv', 3)
-        with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
-            executor.submit(get_pxc_contracts_details_part1)
-            executor.submit(get_pxc_contracts_details_part2)
-            executor.submit(get_pxc_contracts_details_part3)
-            executor.submit(get_pxc_contractswithcustomernames)  # No requirements
-            executor.submit(get_pxc_lifecycle)  # requires get_pxc_customers
-            executor.submit(get_pxc_successtracks)  # No requirements
-            executor.submit(get_pxc_partner_offers)  # No requirements
-            executor.submit(get_pxc_partner_offer_sessions)  # No requirements
-            executor.submit(pxc_assets_reports)  # requires get_pxc_customers
-            executor.submit(pxc_hardware_reports)  # requires get_pxc_customers
-            executor.submit(pxc_software_reports)  # requires get_pxc_customers
-            executor.submit(pxc_licenses_reports)  # requires get_pxc_customers
-            executor.submit(pxc_purchased_licenses_reports)  # requires get_pxc_customers
-            executor.submit(pxc_security_advisories_reports)  # requires get_pxc_customers
-            executor.submit(pxc_field_notices_reports)  # requires get_pxc_customers
-            executor.submit(pxc_priority_bugs_reports)  # requires get_pxc_customers
-            executor.submit(pxc_compliance_violations)  # requires get_pxc_customers
-            executor.submit(pxc_assets_with_violations)  # requires get_pxc_customers
-        merge_files_with_os(file1, file2, file3, contractDetails)
-        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
-            executor.submit(pxc_software_groups)  # requires get_pxc_contractswithcustomernames
-            executor.submit(pxc_afm_faults)  # requires get_pxc_contractswithcustomernames
-            executor.submit(pxc_optin)  # requires get_pxc_customers
-            executor.submit(pxc_crash_risk_assets)  # requires get_pxc_customers
-            executor.submit(pxc_assets_violating_compliance_rule)  # requires pxc_compliance_violations
-            executor.submit(pxc_asset_violations)  # requires pxc_assets_with_violations
-            executor.submit(pxc_compliance_rule_details)  # requires pxc_compliance_violations
-            executor.submit(pxc_compliance_suggestions)  # requires pxc_compliance_violations
-        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
-            executor.submit(pxc_software_group_suggestions)  # requires pxc_software_groups
-            executor.submit(pxc_software_group_suggestions_assets)  # requires pxc_software_groups
-            executor.submit(pxc_afm_fault_summary)  # requires pxc_afm_faults
-            executor.submit(pxc_afm_affected_assets)  # requires pxc_afm_faults
-            executor.submit(pxc_afm_fault_history)  # requires pxc_afm_faults
-            executor.submit(pxc_crash_risk_factors)  # requires pxc_crash_risk_assets
-            executor.submit(pxc_crash_in_last)  # requires pxc_crash_risk_assets
-            executor.submit(pxc_asset_crash_history)  # requires pxc_crash_risk_assets
-            executor.submit(pxc_similar_assets)  # requires pxc_crash_risk_assets
-        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
-            executor.submit(pxc_software_group_suggestions_field_notices)  # req pxc_software_group_suggestions
-            executor.submit(pxc_software_group_suggestions_advisories)  # requires pxc_software_group_suggestions
-            executor.submit(pxc_software_group_suggestions_bug_list)  # requires pxc_software_group_suggestions
+        startTime = time.time()
+        logging.debug(f'Start Time: {datetime.now()}')
+
+        if outputFormat == 1:
+            print('    Saving data in JSON and CSV formats')
+        if outputFormat == 2:
+            print('    Saving data in JSON format')
+        if outputFormat == 3:
+            print('    Saving data in CSV format')
+        temp_storage()  # delete temp and output directories and recreate before every run
+ 
+        print('\n\n')
+        get_pxc_token()			# call the function to get a valid PX Cloud API token
+
+        # All downstread reports need these so block until done
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_threads) as executor:
+            executor.submit(get_pxc_customers)				# No requirements (but all others require it)
+            executor.submit(get_pxc_contractswithcustomernames)		# No requirements
+            executor.submit(get_pxc_partner_offers)			# No requirements
+            executor.submit(get_pxc_partner_offer_sessions)		# No requirements
+            executor.shutdown(wait=True)				# wait until all threads complete
+
+        print(f'**** Completed required get_pxc_customers')
+        logging.debug(f'Completed required get_pxc_customers')
+
+        # Download Level 1 Reports
+        print(f'\n\n\n*** Downloading Level 1 Success Track Data')
+        logging.debug(f'Downloading Level 1 Success Track Data')
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_threads) as executor:
+            executor.submit(pxc_optin)					# requires get_pxc_customers
+            executor.submit(get_pxc_lifecycle)				# requires get_pxc_customers
+            executor.submit(pxc_security_advisories_reports)		# requires get_pxc_customers
+            executor.submit(pxc_field_notices_reports)			# requires get_pxc_customers
+            executor.shutdown(wait=True)				# wait until all threads complete
+
+        print(f'\n\n\n*** Downloading Level 1 Success Track HW Data')
+        logging.debug(f'Downloading Level 1 Success Track HW Data')
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_threads) as executor:
+            executor.submit(pxc_assets_reports)				# requires get_pxc_customers
+            executor.submit(pxc_hardware_reports)			# requires get_pxc_customers
+            executor.shutdown(wait=True)				# wait until all threads complete
+
+        print(f'\n\n\n*** Downloading Level 1 Success Track SW Data')
+        logging.debug(f'Downloading Level 1 Success Track SW Data')
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_threads) as executor:
+            executor.submit(pxc_licenses_reports)			# requires get_pxc_customers
+            executor.submit(pxc_purchased_licenses_reports)		# requires get_pxc_customers
+            executor.submit(pxc_software_reports)			# requires get_pxc_customers
+            executor.submit(pxc_priority_bugs_reports)			# requires get_pxc_customers
+            executor.shutdown(wait=True)				# wait until all threads complete
+
+        # Download Level 2 Reports
+        print(f'\n\n\n*** Downloading Level 2 Success Track Data')
+        logging.debug(f'Downloading Level 2 Success Track Data')
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_threads) as executor:
+            executor.submit(pxc_assets_with_violations)			# requires get_pxc_customers
+            executor.submit(pxc_compliance_violations)			# requires get_pxc_customers
+            executor.submit(pxc_crash_risk_assets)			# requires get_pxc_customers
+            executor.submit(pxc_software_groups)			# requires get_pxc_contractswithcustomernames
+            executor.submit(pxc_afm_faults)				# requires get_pxc_contractswithcustomernames
+            executor.shutdown(wait=True)				# wait until all threads complete
+
+        print(f'\n\n\n*** Downloading Level 2 Success Track SW Data')
+        logging.debug(f'Downloading Level 2 Success Track SW Data')
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_threads) as executor:
+            executor.submit(pxc_software_group_suggestions)		# requires pxc_software_groups
+            executor.submit(pxc_swgroup_suggestions_assets)		# requires pxc_software_groups
+            executor.shutdown(wait=True)				# wait until all threads complete
+
+        print(f'\n\n\n*** Downloading Level 2 Success Track Violation Data')
+        logging.debug(f'Downloading Level 2 Success Track Violation Data')
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_threads) as executor:
+            executor.submit(pxc_asset_violations)			# requires pxc_assets_with_violations
+            executor.submit(pxc_assets_violating_compliance_rule)	# requires pxc_compliance_violations
+            executor.submit(pxc_compliance_rule_details)		# requires pxc_compliance_violations
+            executor.submit(pxc_compliance_suggestions)			# requires pxc_compliance_violations
+            executor.shutdown(wait=True)				# wait until all threads complete
+
+        print(f'\n\n\n*** Downloading Level 2 Success Track AFM/Crash/Notice Data')
+        logging.debug(f'Downloading Level 2 Success Track  AFM/Crash/Notice Data')
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_threads) as executor:
+            executor.submit(pxc_afm_fault_summary)			# requires pxc_afm_faults
+            executor.submit(pxc_afm_affected_assets)			# requires pxc_afm_faults
+            executor.submit(pxc_afm_fault_history)			# requires pxc_afm_faults
+            executor.submit(pxc_crash_risk_factors)			# requires pxc_crash_risk_assets
+            executor.submit(pxc_crash_in_last)				# requires pxc_crash_risk_assets
+            executor.submit(pxc_asset_crash_history)			# requires pxc_crash_risk_assets
+            executor.submit(pxc_similar_assets)				# requires pxc_crash_risk_assets
+            executor.submit(pxc_swgroup_suggestions_field_notices)	# requires req pxc_software_group_suggestions
+            executor.submit(pxc_swgroup_suggestions_advisories)		# requires pxc_software_group_suggestions
+            executor.submit(pxc_swgroup_suggestions_bug_list)		# requires pxc_software_group_suggestions
+            executor.shutdown(wait=True)				# wait until all threads complete
+
+        # Download Contract Details
+        print(f'\n\n\n*** Downloading Contract Detail Data')
+        logging.debug(f'Downloading Contract Detail Data')
+        get_pxc_contracts()						# requires get_pxc_customers
+        split_contract_detail_file(chunks)				# requires get_pxc_contracts
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_threads) as executor:
+            for chunk in range(chunks):
+                executor.submit(get_pxc_contracts_details, chunk)	# Process the results in chunks
+            executor.shutdown(wait=True)				# wait until all threads complete
+        merge_contract_detail_chunks(chunks, contractDetails)		# Assemble them into a single file
+
         # Send all CSV files in the output data folder to AWS S3 storage
         s3_storage()
+
         # Record time and cleanly exit or run next itteration
         print('******************** Script Executed Successfully ********************')
         logging.debug('******************** Script Executed Successfully ********************')
@@ -6317,24 +6027,18 @@ def main():
         print(f'Total Time:{math.ceil(int(stopTime - startTime) / 60)} minutes')
         logging.debug(f'Total Time:{math.ceil(int(stopTime - startTime) / 60)} minutes')
 
-        # copy multiple tests in different folders under 'Results-#'
-        if testLoop > 1:
-            collectionResultsDir = 'Results-' + str(x + 1) + '/'
-            if os.path.isdir(collectionResultsDir):
-                shutil.rmtree(collectionResultsDir)
-
-            # Save all output files
-            shutil.move(log_output_dir, collectionResultsDir + log_output_dir)
-            if outputFormat == 1 or outputFormat == 2:
-                print(f'Total bytes collected for JSONs: {get_dir_size(json_output_dir)}')
-                logging.info(f'Total bytes collected for JSONs: {get_dir_size(json_output_dir)}')
-                shutil.move(json_output_dir, collectionResultsDir + json_output_dir)
-            if outputFormat == 1 or outputFormat == 3:
-                print(f'Total bytes collected for CSVs : {get_dir_size(csv_output_dir)}')
-                logging.info(f'Total bytes collected for CSVs : {get_dir_size(csv_output_dir)}')
-                shutil.move(csv_output_dir, collectionResultsDir + csv_output_dir)
-        #end if 
-
+        # copy multiple tests in different folders under 'Collection Results #'
+        collectionResultsDir = 'Collection Results ' + str(x + 1) + '/'
+        if os.path.isdir(collectionResultsDir):
+            shutil.rmtree(collectionResultsDir)
+        if outputFormat == 1 or outputFormat == 2:
+            print(f'Total bytes collected for JSONs: {get_dir_size(json_output_dir)}')
+            logging.info(f'Total bytes collected for JSONs: {get_dir_size(json_output_dir)}')
+            shutil.move(json_output_dir, collectionResultsDir + json_output_dir)
+        if outputFormat == 1 or outputFormat == 3:
+            print(f'Total bytes collected for CSVs : {get_dir_size(csv_output_dir)}')
+            logging.info(f'Total bytes collected for CSVs : {get_dir_size(csv_output_dir)}')
+            shutil.move(csv_output_dir, collectionResultsDir + csv_output_dir)
         if x + 1 == testLoop:
             # Clean exit
             if outputFormat == 2:
@@ -6346,8 +6050,9 @@ def main():
             logging.debug('pausing for 5 secs')
             time.sleep(5)
 
-
 if __name__ == '__main__':
+    cpu_threads = os.cpu_count()
+
     # setup parser
     parser = argparse.ArgumentParser(description="Your script description.")
     parser.add_argument("customer", nargs='?', default='credentials', help="Customer name")
@@ -6391,7 +6096,5 @@ if __name__ == '__main__':
     pxc_url_partner_offers = pxc_url_base + 'partnerOffers/'
     pxc_url_partner_offers_sessions = pxc_url_base + 'partnerOffersSessions/'
     pxc_url_successTracks = pxc_url_base + 'successTracks/'
-    file1 = 'temp/CD_0.csv'
-    file2 = 'temp/CD_1.csv'
-    file3 = 'temp/CD_2.csv'
+
     main()
